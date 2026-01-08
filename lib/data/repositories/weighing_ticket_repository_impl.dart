@@ -10,13 +10,16 @@ class WeighingTicketRepositoryImpl implements WeighingTicketRepository {
 
   // Singleton for demo
   static WeighingTicketRepositoryImpl? _instance;
-  static WeighingTicketRepositoryImpl get instance => 
+  static WeighingTicketRepositoryImpl get instance =>
       _instance ??= WeighingTicketRepositoryImpl._();
   WeighingTicketRepositoryImpl._();
 
   // In-memory storage for demo (replace with actual SQLite)
   final List<WeighingTicket> _tickets = [];
   int _nextId = 1;
+
+  /// Synchronous getter for UI display (for use in build methods)
+  List<WeighingTicket> get tickets => List.from(_tickets);
 
   @override
   Future<List<WeighingTicket>> getAll() async {
@@ -47,10 +50,13 @@ class WeighingTicketRepositoryImpl implements WeighingTicketRepository {
   }
 
   @override
-  Future<List<WeighingTicket>> getByDateRange(DateTime from, DateTime to) async {
-    return _tickets.where((t) => 
-      t.createdAt.isAfter(from) && t.createdAt.isBefore(to)
-    ).toList();
+  Future<List<WeighingTicket>> getByDateRange(
+    DateTime from,
+    DateTime to,
+  ) async {
+    return _tickets
+        .where((t) => t.createdAt.isAfter(from) && t.createdAt.isBefore(to))
+        .toList();
   }
 
   @override
@@ -131,7 +137,9 @@ class WeighingTicketRepositoryImpl implements WeighingTicketRepository {
     // UPDATE weighing_tickets SET is_synced = 1, azure_id = ?, synced_at = ? WHERE id IN (?)
     for (var i = 0; i < localIds.length; i++) {
       final localId = localIds[i];
-      final azureId = azureIds != null && i < azureIds.length ? azureIds[i] : null;
+      final azureId = azureIds != null && i < azureIds.length
+          ? azureIds[i]
+          : null;
       await markOneSynced(localId, azureId);
     }
   }
@@ -151,18 +159,16 @@ class WeighingTicketRepositoryImpl implements WeighingTicketRepository {
   @override
   Future<List<WeighingTicket>> getLast30Days() async {
     final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
-    return _tickets
-        .where((t) => t.createdAt.isAfter(thirtyDaysAgo))
-        .toList()
+    return _tickets.where((t) => t.createdAt.isAfter(thirtyDaysAgo)).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 
   // ============ DEMO DATA ============
-  
+
   /// Add sample data for testing
   void addSampleData() {
     final now = DateTime.now();
-    
+
     _tickets.addAll([
       WeighingTicket(
         id: _nextId++,

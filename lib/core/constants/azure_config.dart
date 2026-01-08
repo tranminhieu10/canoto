@@ -1,5 +1,25 @@
 /// Azure Configuration Constants
-/// Replace these values with your actual Azure resource configurations
+/// 
+/// IMPORTANT: Security Notice
+/// ========================
+/// This file contains placeholder values for Azure secrets.
+/// In production, use one of these approaches:
+/// 
+/// 1. Environment Variables (Recommended for Desktop):
+///    - Create a .env file (add to .gitignore!)
+///    - Use flutter_dotenv package to load values
+///    - Example: String.fromEnvironment('STORAGE_KEY')
+/// 
+/// 2. Secure Storage:
+///    - Use flutter_secure_storage for sensitive data
+///    - Load credentials at runtime, never hardcode
+/// 
+/// 3. Azure Key Vault:
+///    - For enterprise apps, fetch secrets from Key Vault
+///    - Use Azure AD authentication to access
+/// 
+/// Never commit actual secrets to version control!
+/// 
 class AzureConfig {
   AzureConfig._();
 
@@ -8,10 +28,14 @@ class AzureConfig {
   // ============================================================
   
   /// Base URL for Azure Functions API
-  static const String apiBaseUrl = 'https://canoto-api.azurewebsites.net/api';
+  static const String apiBaseUrl = 'https://func-tramcan-hieu.azurewebsites.net/api';
   
   /// Azure Functions Host Key (for function-level authorization)
-  static const String functionHostKey = 'YOUR_FUNCTION_HOST_KEY';
+  /// IMPORTANT: Load from environment or secure storage in production!
+  static const String functionHostKey = String.fromEnvironment(
+    'AZURE_FUNCTION_KEY',
+    defaultValue: '', // Set via --dart-define or .env file
+  );
   
   /// API Version
   static const String apiVersion = 'v1';
@@ -24,23 +48,29 @@ class AzureConfig {
   // ============================================================
   
   /// SQL Server hostname
-  static const String sqlServerHost = 'canoto-sql-server.database.windows.net';
+  static const String sqlServerHost = 'sql-tramcan-hieu.database.windows.net';
   
   /// SQL Database name
-  static const String sqlDatabaseName = 'canoto-db';
+  static const String sqlDatabaseName = 'sql-tramcan-hieu';
   
   /// SQL Server port
   static const int sqlServerPort = 1433;
+  
+  /// SQL Connection String (for reference - use secure storage in production)
+  /// Server=tcp:sql-tramcan-hieu.database.windows.net,1433;Initial Catalog=sql-tramcan-hieu;...
 
   // ============================================================
   // Azure Blob Storage Configuration
   // ============================================================
   
   /// Storage Account Name
-  static const String storageAccountName = 'canotostorage';
+  static const String storageAccountName = 'strtramcanhieu';
   
-  /// Storage Account Key (keep secure!)
-  static const String storageAccountKey = 'YOUR_STORAGE_ACCOUNT_KEY';
+  /// Storage Account Key (keep secure! - load from environment in production)
+  static const String storageAccountKey = String.fromEnvironment(
+    'AZURE_STORAGE_KEY',
+    defaultValue: '', // Set via --dart-define or .env file
+  );
   
   /// Blob Container for weighing images
   static const String blobContainerImages = 'weighing-images';
@@ -60,25 +90,40 @@ class AzureConfig {
   // Azure SignalR Service Configuration
   // ============================================================
   
-  /// SignalR Hub URL
+  /// SignalR Hub URL (connect through Azure Functions for negotiate)
   static const String signalRHubUrl = 
-      'https://canoto-api.azurewebsites.net/notificationHub';
+      'https://func-tramcan-hieu.azurewebsites.net/api/notificationHub';
   
-  /// SignalR Connection String (for server-side)
-  static const String signalRConnectionString = 'YOUR_SIGNALR_CONNECTION_STRING';
+  /// SignalR Service Endpoint
+  static const String signalREndpoint = 'https://sig-tramcan-hieu.service.signalr.net';
+  
+  /// SignalR Access Key
+  static const String signalRAccessKey = String.fromEnvironment(
+    'AZURE_SIGNALR_KEY',
+    defaultValue: '', // Set via --dart-define or .env file
+  );
 
   // ============================================================
   // Azure IoT Hub Configuration
   // ============================================================
   
   /// IoT Hub Hostname
-  static const String iotHubHostname = 'canoto-iothub.azure-devices.net';
+  static const String iotHubHostname = 'iot-tramcan-hieu.azure-devices.net';
   
-  /// IoT Hub Connection String
-  static const String iotHubConnectionString = 'YOUR_IOT_HUB_CONNECTION_STRING';
+  /// IoT Hub Device Connection String
+  static const String iotHubConnectionString = String.fromEnvironment(
+    'AZURE_IOT_CONNECTION_STRING',
+    defaultValue: '', // Set via --dart-define or .env file
+  );
   
   /// Device ID for this weighing station
-  static const String iotDeviceId = 'weighing-station-01';
+  static const String iotDeviceId = 'scale-station-01';
+  
+  /// Shared Access Key for device
+  static const String iotDeviceKey = String.fromEnvironment(
+    'AZURE_IOT_DEVICE_KEY',
+    defaultValue: '', // Set via --dart-define or .env file
+  );
   
   /// MQTT Port for IoT Hub
   static const int iotHubMqttPort = 8883;

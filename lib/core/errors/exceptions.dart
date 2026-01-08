@@ -31,13 +31,11 @@ class DeviceException extends AppException {
   final String deviceName;
 
   DeviceException({
-    required String message,
+    required super.message,
     required this.deviceName,
-    dynamic originalError,
+    super.originalError,
   }) : super(
-          message: message,
           type: ErrorType.device,
-          originalError: originalError,
         );
 }
 
@@ -46,24 +44,20 @@ class NetworkException extends AppException {
   final int? statusCode;
 
   NetworkException({
-    required String message,
+    required super.message,
     this.statusCode,
-    dynamic originalError,
+    super.originalError,
   }) : super(
-          message: message,
           type: ErrorType.network,
-          originalError: originalError,
         );
 }
 
 /// Database related exceptions
 class DatabaseException extends AppException {
   DatabaseException({
-    required String message,
-    dynamic originalError,
+    required super.message,
+    super.originalError,
   }) : super(
-          message: message,
           type: ErrorType.database,
-          originalError: originalError,
         );
 }

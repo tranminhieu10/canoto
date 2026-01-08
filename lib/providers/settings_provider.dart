@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:canoto/core/constants/azure_config.dart';
 
 /// Settings Provider - Manages app settings and preferences
 class SettingsProvider extends ChangeNotifier {
@@ -18,6 +19,11 @@ class SettingsProvider extends ChangeNotifier {
   static const String _keyBarrierAutoOpen = 'barrier_auto_open';
   static const String _keyScalePort = 'scale_port';
   static const String _keyScaleBaudRate = 'scale_baud_rate';
+  static const String _keyScaleConnectionType = 'scale_connection_type';
+  static const String _keyScaleIpAddress = 'scale_ip_address';
+  static const String _keyScaleTcpPort = 'scale_tcp_port';
+  static const String _keyScaleProtocol = 'scale_protocol';
+  static const String _keyScaleWeightUnit = 'scale_weight_unit';
   static const String _keyPrinterName = 'printer_name';
   static const String _keyPrintAutomatic = 'print_automatic';
   static const String _keyAzureApiUrl = 'azure_api_url';
@@ -39,15 +45,20 @@ class SettingsProvider extends ChangeNotifier {
   bool _autoBackup = true;
   int _backupInterval = 24; // hours
   bool _cameraEnabled = true;
-  String _cameraUrl = 'rtsp://admin:abcd1234@192.168.1.232:554/main';
+  String _cameraUrl = 'rtsp://192.168.1.232:554/main';
   bool _barrierEnabled = true;
   bool _barrierAutoOpen = false;
   String _scalePort = 'COM1';
   int _scaleBaudRate = 9600;
+  String _scaleConnectionType = 'tcp'; // 'serial' or 'tcp'
+  String _scaleIpAddress = '192.168.1.100';
+  int _scaleTcpPort = 8899;
+  String _scaleProtocol = 'nhb'; // 'nhb', 'a_d', 'mettler', 'ohaus', 'custom'
+  String _scaleWeightUnit = 'kg'; // 'kg', 'g', 'tan', 'lb'
   String _printerName = '';
   bool _printAutomatic = false;
-  String _azureApiUrl = 'https://canoto-api.azurewebsites.net/api';
-  String _azureFunctionKey = '';
+  String _azureApiUrl = AzureConfig.apiBaseUrl;
+  String _azureFunctionKey = AzureConfig.functionHostKey;
   bool _iotHubEnabled = false;
   bool _signalREnabled = true;
   bool _notificationsEnabled = true;
@@ -71,6 +82,11 @@ class SettingsProvider extends ChangeNotifier {
   bool get barrierAutoOpen => _barrierAutoOpen;
   String get scalePort => _scalePort;
   int get scaleBaudRate => _scaleBaudRate;
+  String get scaleConnectionType => _scaleConnectionType;
+  String get scaleIpAddress => _scaleIpAddress;
+  int get scaleTcpPort => _scaleTcpPort;
+  String get scaleProtocol => _scaleProtocol;
+  String get scaleWeightUnit => _scaleWeightUnit;
   String get printerName => _printerName;
   bool get printAutomatic => _printAutomatic;
   String get azureApiUrl => _azureApiUrl;
@@ -102,7 +118,7 @@ class SettingsProvider extends ChangeNotifier {
     // Sync
     _autoSync = _prefs.getBool(_keyAutoSync) ?? true;
     _syncInterval = _prefs.getInt(_keySyncInterval) ?? 5;
-    
+
     // Backup
     _autoBackup = _prefs.getBool(_keyAutoBackup) ?? true;
     _backupInterval = _prefs.getInt(_keyBackupInterval) ?? 24;
@@ -118,6 +134,11 @@ class SettingsProvider extends ChangeNotifier {
     // Scale
     _scalePort = _prefs.getString(_keyScalePort) ?? 'COM1';
     _scaleBaudRate = _prefs.getInt(_keyScaleBaudRate) ?? 9600;
+    _scaleConnectionType = _prefs.getString(_keyScaleConnectionType) ?? 'tcp';
+    _scaleIpAddress = _prefs.getString(_keyScaleIpAddress) ?? '192.168.1.100';
+    _scaleTcpPort = _prefs.getInt(_keyScaleTcpPort) ?? 8899;
+    _scaleProtocol = _prefs.getString(_keyScaleProtocol) ?? 'nhb';
+    _scaleWeightUnit = _prefs.getString(_keyScaleWeightUnit) ?? 'kg';
 
     // Printer
     _printerName = _prefs.getString(_keyPrinterName) ?? '';
@@ -207,6 +228,36 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setScaleBaudRate(int baudRate) async {
     _scaleBaudRate = baudRate;
     await _prefs.setInt(_keyScaleBaudRate, baudRate);
+    notifyListeners();
+  }
+
+  Future<void> setScaleConnectionType(String type) async {
+    _scaleConnectionType = type;
+    await _prefs.setString(_keyScaleConnectionType, type);
+    notifyListeners();
+  }
+
+  Future<void> setScaleIpAddress(String ip) async {
+    _scaleIpAddress = ip;
+    await _prefs.setString(_keyScaleIpAddress, ip);
+    notifyListeners();
+  }
+
+  Future<void> setScaleTcpPort(int port) async {
+    _scaleTcpPort = port;
+    await _prefs.setInt(_keyScaleTcpPort, port);
+    notifyListeners();
+  }
+
+  Future<void> setScaleProtocol(String protocol) async {
+    _scaleProtocol = protocol;
+    await _prefs.setString(_keyScaleProtocol, protocol);
+    notifyListeners();
+  }
+
+  Future<void> setScaleWeightUnit(String unit) async {
+    _scaleWeightUnit = unit;
+    await _prefs.setString(_keyScaleWeightUnit, unit);
     notifyListeners();
   }
 

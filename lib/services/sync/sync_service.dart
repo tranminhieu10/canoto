@@ -33,11 +33,25 @@ class SyncService {
   /// Current sync status
   SyncStatus _status = SyncStatus.idle;
   SyncStatus get status => _status;
+  bool get isSyncing => _isSyncing;
 
-  /// Initialize sync service
-  void initialize() {
-    _apiService.initialize();
-    debugPrint('SyncService: Initialized');
+  /// Reset sync state (use when sync is stuck)
+  void resetSyncState() {
+    _isSyncing = false;
+    _updateStatus(SyncStatus.idle);
+    debugPrint('SyncService: State reset to idle');
+  }
+
+  /// Initialize sync service with Azure settings
+  void initialize({String? apiKey, String? baseUrl}) {
+    resetSyncState(); // Reset sync state on init
+    _apiService.initialize(apiKey: apiKey, baseUrl: baseUrl);
+    debugPrint('SyncService: Initialized with Azure settings - apiKey=${apiKey != null && apiKey.isNotEmpty}, baseUrl=$baseUrl');
+  }
+
+  /// Update configuration
+  void configure({String? apiKey, String? baseUrl}) {
+    _apiService.configure(apiKey: apiKey, baseUrl: baseUrl);
   }
 
   /// Dispose resources
@@ -105,11 +119,15 @@ class SyncService {
 
     _isSyncing = true;
     _updateStatus(SyncStatus.syncing);
+    debugPrint('SyncService: Starting sync...');
 
     try {
       // Step 1: Check network availability
+      debugPrint('SyncService: Checking network...');
       final isOnline = await _apiService.isNetworkAvailable();
       if (!isOnline) {
+        debugPrint('SyncService: No network connection');
+        _isSyncing = false; // Reset sync flag
         _updateStatus(SyncStatus.offline);
         return SyncResult(
           success: false,
@@ -117,13 +135,19 @@ class SyncService {
           syncedCount: 0,
         );
       }
+      debugPrint('SyncService: Network OK');
 
       // Step 2: Get unsynced records from local DB
+      debugPrint('SyncService: Getting unsynced tickets...');
       List<WeighingTicket> unsyncedTickets = [];
       if (getUnsyncedTickets != null) {
         unsyncedTickets = await getUnsyncedTickets();
+      } else {
+        debugPrint('SyncService: WARNING - getUnsyncedTickets callback is null!');
       }
 
+      debugPrint('SyncService: Found ${unsyncedTickets.length} unsynced tickets');
+      
       if (unsyncedTickets.isEmpty) {
         _updateStatus(SyncStatus.synced);
         return SyncResult(
@@ -133,10 +157,10 @@ class SyncService {
         );
       }
 
-      debugPrint('SyncService: Found ${unsyncedTickets.length} unsynced tickets');
-
       // Step 3: Convert to JSON
+      debugPrint('SyncService: Converting ${unsyncedTickets.length} tickets to JSON...');
       final jsonData = unsyncedTickets.map((t) => t.toJson()).toList();
+      debugPrint('SyncService: JSON data ready, uploading...');
 
       // Step 4: POST to Azure API with retry
       ApiResponse? response;
@@ -147,6 +171,7 @@ class SyncService {
         debugPrint('SyncService: Upload attempt $attempts/$maxRetryAttempts');
         
         response = await _apiService.uploadWeighingTicketsData(jsonData);
+        debugPrint('SyncService: Response: ${response.success} - ${response.message}');
         
         if (response.success) {
           break;
@@ -199,7 +224,7 @@ class SyncService {
   }
 
   /// Force sync immediately
-  Future<SyncResult> forcSync({
+  Future<SyncResult> forceSync({
     Future<List<WeighingTicket>> Function()? getUnsyncedTickets,
     Future<void> Function(List<int> ids, List<int?> azureIds)? markAsSynced,
   }) async {

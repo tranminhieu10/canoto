@@ -1,4 +1,5 @@
 export 'scale/scale.dart';
+export 'scale/serial_scale_service_impl.dart';
 export 'camera/camera.dart';
 export 'barrier/barrier.dart';
 export 'license_plate/license_plate.dart';
@@ -9,3 +10,8 @@ export 'sync/sync_service.dart';
 export 'mqtt/mqtt_service.dart';
 export 'signalr/signalr_service.dart';
 export 'storage/blob_storage_service.dart';
+export 'print/print_service.dart';
+export 'logging/logging_service.dart';
+export 'error/error_handler.dart';
+export 'export/export_excel_service.dart';
+export 'database/database_service.dart';

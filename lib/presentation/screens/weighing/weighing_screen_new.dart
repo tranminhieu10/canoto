@@ -1,8 +1,18 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:provider/provider.dart';
 import 'package:canoto/services/sync/sync_service.dart';
+import 'package:canoto/services/scale/scale_service_manager.dart';
+import 'package:canoto/services/scale/nhb3000_scale_service.dart';
+import 'package:canoto/services/scale/serial_scale_service_impl.dart';
+import 'package:canoto/services/print/print_service.dart';
+import 'package:canoto/services/logging/logging_service.dart';
+import 'package:canoto/providers/settings_provider.dart';
 import 'package:canoto/data/repositories/weighing_ticket_repository_impl.dart';
+import 'package:canoto/data/models/weighing_ticket.dart';
+import 'package:canoto/data/models/enums/weighing_enums.dart';
 
 /// Màn hình cân xe chính - Thiết kế chuyên nghiệp
 class WeighingScreenNew extends StatefulWidget {
@@ -18,18 +28,29 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   late final VideoController _videoController;
   bool _isCameraConnected = false;
   bool _isCameraLoading = true;
-  final String _rtspUrl = 'rtsp://admin:abcd1234@192.168.1.232:554/main';
 
-  // Weight data
+  // Scale Service Manager (hỗ trợ cả TCP và Serial)
+  final ScaleServiceManager _scaleService = ScaleServiceManager.instance;
+  StreamSubscription<double>? _weightSubscription;
+  StreamSubscription<UnifiedScaleStatus>? _scaleStatusSubscription;
+  UnifiedScaleStatus _scaleStatus = UnifiedScaleStatus.disconnected;
+  String _weightUnit = 'kg';
+
+  // Stream subscriptions for proper cleanup
+  StreamSubscription? _playingSubscription;
+  StreamSubscription? _errorSubscription;
+  late final void Function(SyncStatus) _syncListener;
+
+  // Weight data - Real data from NHB3000
   double _currentWeight = 0;
   double _grossWeight = 0; // Trọng lượng tổng
   double _tareWeight = 0; // Trọng lượng bì
   double _netWeight = 0; // Trọng lượng hàng
   bool _isStable = false;
-  bool _isConnected = true;
+  bool _isScaleConnected = false;
 
   // Form data
-  String _ticketNumber = '2601070001';
+  String _ticketNumber = '';
   String _ticketType = 'incoming'; // incoming, outgoing, service
   String _buyer = '';
   String _seller = '';
@@ -53,32 +74,119 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     super.initState();
     _generateTicketNumber();
     _initCamera();
+    _initScale();
     _initSync();
   }
 
+  void _initScale() {
+    // Get scale settings from provider
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final settings = context.read<SettingsProvider>();
+
+      // Lấy đơn vị cân
+      _weightUnit = settings.scaleWeightUnit;
+
+      // Cấu hình ScaleServiceManager - tự động chọn Serial hoặc TCP
+      _scaleService.configure(
+        connectionType: settings.scaleConnectionType,
+        portName: settings.scalePort.isNotEmpty ? settings.scalePort : 'COM1',
+        baudRate: settings.scaleBaudRate > 0 ? settings.scaleBaudRate : 9600,
+        ipAddress: settings.scaleIpAddress.isNotEmpty
+            ? settings.scaleIpAddress
+            : '192.168.1.100',
+        tcpPort: settings.scaleTcpPort > 0 ? settings.scaleTcpPort : 8899,
+        protocol: _getScaleProtocol(settings.scaleProtocol),
+        weightUnit: settings.scaleWeightUnit,
+      );
+
+      // Subscribe to weight stream
+      _weightSubscription = _scaleService.weightStream.listen((weight) {
+        if (mounted) {
+          setState(() {
+            _currentWeight = weight;
+          });
+        }
+      });
+
+      // Subscribe to status stream
+      _scaleStatusSubscription = _scaleService.statusStream.listen((status) {
+        if (mounted) {
+          setState(() {
+            _scaleStatus = status;
+            _isScaleConnected = status.isOk;
+            _isStable = status == UnifiedScaleStatus.stable;
+          });
+        }
+      });
+
+      // Connect to scale
+      _connectScale();
+    });
+  }
+
+  ScaleProtocol _getScaleProtocol(String protocol) {
+    switch (protocol) {
+      case 'nhb':
+      case 'nhb3000':
+        return ScaleProtocol.nhb;
+      case 'and_gf':
+        return ScaleProtocol.andGf;
+      case 'mettler':
+        return ScaleProtocol.mettlerToledo;
+      case 'ohaus':
+        return ScaleProtocol.ohaus;
+      default:
+        return ScaleProtocol.custom;
+    }
+  }
+
+  Future<void> _connectScale() async {
+    final settings = context.read<SettingsProvider>();
+    final connType = settings.scaleConnectionType;
+    debugPrint('WeighingScreen: Connecting to scale via $connType...');
+    final success = await _scaleService.connect();
+    if (mounted) {
+      setState(() {
+        _isScaleConnected = success;
+      });
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Không thể kết nối đầu cân ${connType == "serial" ? "Serial" : "NHB3000"}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   void _initSync() {
-    // Initialize sync service
-    SyncService.instance.initialize();
+    // Get Azure settings from provider
+    final settings = context.read<SettingsProvider>();
     
-    // Add sample data for demo
-    WeighingTicketRepositoryImpl.instance.addSampleData();
-    
-    // Listen for sync status changes
-    SyncService.instance.addListener((status) {
+    // Initialize sync service with Azure configuration
+    SyncService.instance.initialize(
+      apiKey: settings.azureFunctionKey,
+      baseUrl: settings.azureApiUrl,
+    );
+
+    // Listen for sync status changes with removable listener
+    _syncListener = (status) {
       if (mounted) {
         setState(() {
           _isSynced = status == SyncStatus.synced;
         });
       }
-    });
+    };
+    SyncService.instance.addListener(_syncListener);
   }
 
   void _initCamera() {
     _player = Player();
     _videoController = VideoController(_player);
-    
-    // Listen for player state changes
-    _player.stream.playing.listen((playing) {
+
+    // Listen for player state changes with cancellable subscription
+    _playingSubscription = _player.stream.playing.listen((playing) {
       if (mounted) {
         setState(() {
           _isCameraConnected = playing;
@@ -86,8 +194,8 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
         });
       }
     });
-    
-    _player.stream.error.listen((error) {
+
+    _errorSubscription = _player.stream.error.listen((error) {
       if (mounted) {
         setState(() {
           _isCameraConnected = false;
@@ -96,18 +204,25 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
         debugPrint('Camera error: $error');
       }
     });
-    
+
     // Connect to RTSP stream
     _connectCamera();
   }
 
   Future<void> _connectCamera() async {
+    if (!mounted) return;
     setState(() {
       _isCameraLoading = true;
     });
-    
+
     try {
-      await _player.open(Media(_rtspUrl));
+      // Get camera URL from settings
+      final settings = context.read<SettingsProvider>();
+      final cameraUrl = settings.cameraUrl.isNotEmpty
+          ? settings.cameraUrl
+          : 'rtsp://192.168.1.232:554/main';
+
+      await _player.open(Media(cameraUrl));
     } catch (e) {
       debugPrint('Failed to connect camera: $e');
       if (mounted) {
@@ -121,12 +236,23 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
 
   void _generateTicketNumber() {
     final now = DateTime.now();
+    // Format: YYMMDDXXXX where XXXX is sequential number
     _ticketNumber =
-        '${now.year % 100}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}0001';
+        'PC-${now.year % 100}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-0001';
   }
 
   @override
   void dispose() {
+    // Cancel stream subscriptions to prevent memory leaks
+    _playingSubscription?.cancel();
+    _errorSubscription?.cancel();
+    _weightSubscription?.cancel();
+    _scaleStatusSubscription?.cancel();
+    SyncService.instance.removeListener(_syncListener);
+
+    // Disconnect scale
+    _scaleService.disconnect();
+
     _player.dispose();
     _licensePlateController.dispose();
     _containerController.dispose();
@@ -182,10 +308,7 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF1E3A5F),
-            Color(0xFF2D4A6F),
-          ],
+          colors: [Color(0xFF1E3A5F), Color(0xFF2D4A6F)],
         ),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
@@ -203,7 +326,9 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
               color: Colors.black.withOpacity(0.2),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(16),
+              ),
             ),
             child: Row(
               children: [
@@ -211,11 +336,15 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                   width: 10,
                   height: 10,
                   decoration: BoxDecoration(
-                    color: _isConnected ? Colors.greenAccent : Colors.red,
+                    color: _isScaleConnected ? Colors.greenAccent : Colors.red,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: (_isConnected ? Colors.greenAccent : Colors.red).withOpacity(0.5),
+                        color:
+                            (_isScaleConnected
+                                    ? Colors.greenAccent
+                                    : Colors.red)
+                                .withOpacity(0.5),
                         blurRadius: 6,
                         spreadRadius: 2,
                       ),
@@ -223,14 +352,28 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                const Text(
-                  'BÀN CÂN 1',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'NHB3000',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    Text(
+                      _scaleStatus.displayName,
+                      style: TextStyle(
+                        color: _isScaleConnected
+                            ? Colors.greenAccent
+                            : Colors.orangeAccent,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
                 ),
                 const Spacer(),
                 _buildStatusChip(
@@ -254,7 +397,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                       decoration: BoxDecoration(
                         color: const Color(0xFF0D1117),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF30363D), width: 2),
+                        border: Border.all(
+                          color: const Color(0xFF30363D),
+                          width: 2,
+                        ),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withOpacity(0.3),
@@ -267,7 +413,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
@@ -285,15 +434,19 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                                     letterSpacing: 6,
                                     shadows: [
                                       Shadow(
-                                        color: (_currentWeight > 0 ? const Color(0xFF39FF14) : const Color(0xFFFF4444)).withOpacity(0.5),
+                                        color:
+                                            (_currentWeight > 0
+                                                    ? const Color(0xFF39FF14)
+                                                    : const Color(0xFFFF4444))
+                                                .withOpacity(0.5),
                                         blurRadius: 20,
                                       ),
                                     ],
                                   ),
                                 ),
-                                const Text(
-                                  'kg',
-                                  style: TextStyle(
+                                Text(
+                                  _scaleService.getWeightUnitSuffix(),
+                                  style: const TextStyle(
                                     color: Colors.white38,
                                     fontSize: 16,
                                     fontWeight: FontWeight.w300,
@@ -393,9 +546,13 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
       ),
     );
   }
-  
+
   Widget _buildActionButtonCompact(
-      String label, IconData icon, Color color, VoidCallback onPressed) {
+    String label,
+    IconData icon,
+    Color color,
+    VoidCallback onPressed,
+  ) {
     return ElevatedButton(
       onPressed: onPressed,
       style: ElevatedButton.styleFrom(
@@ -412,7 +569,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
           children: [
             Icon(icon, size: 16),
             const SizedBox(height: 2),
-            Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500)),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
+            ),
           ],
         ),
       ),
@@ -420,7 +580,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   Widget _buildWeightCard(
-      String label, double weight, Color color, IconData icon) {
+    String label,
+    double weight,
+    Color color,
+    IconData icon,
+  ) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
       decoration: BoxDecoration(
@@ -442,7 +606,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                   const SizedBox(width: 4),
                   Text(
                     label,
-                    style: TextStyle(color: color.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w500),
+                    style: TextStyle(
+                      color: color.withOpacity(0.9),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ),
@@ -517,7 +685,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                     color: Colors.white.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Icon(Icons.videocam, color: Colors.white, size: 18),
+                  child: const Icon(
+                    Icons.videocam,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 const Expanded(
@@ -562,7 +734,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.document_scanner, color: Color(0xFF1976D2), size: 20),
+                const Icon(
+                  Icons.document_scanner,
+                  color: Color(0xFF1976D2),
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
@@ -581,16 +757,26 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                 ),
                 IconButton(
                   onPressed: _onRecognizePlate,
-                  icon: const Icon(Icons.search, color: Color(0xFF1976D2), size: 20),
+                  icon: const Icon(
+                    Icons.search,
+                    color: Color(0xFF1976D2),
+                    size: 20,
+                  ),
                   tooltip: 'Nhận diện biển số',
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
                   padding: EdgeInsets.zero,
                 ),
                 IconButton(
                   onPressed: _onClearPlate,
                   icon: const Icon(Icons.clear, color: Colors.grey, size: 20),
                   tooltip: 'Xóa',
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
                   padding: EdgeInsets.zero,
                 ),
               ],
@@ -601,7 +787,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     );
   }
 
-  Widget _buildCameraButton(IconData icon, String tooltip, VoidCallback onPressed) {
+  Widget _buildCameraButton(
+    IconData icon,
+    String tooltip,
+    VoidCallback onPressed,
+  ) {
     return IconButton(
       onPressed: onPressed,
       icon: Icon(icon, color: Colors.white, size: 18),
@@ -649,7 +839,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
               ),
             ),
           ],
@@ -658,10 +851,7 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     }
 
     // Hiển thị video từ camera RTSP
-    return Video(
-      controller: _videoController,
-      fill: Colors.black,
-    );
+    return Video(controller: _videoController, fill: Colors.black);
   }
 
   /// Widget Form Section
@@ -697,7 +887,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                     color: Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Icon(Icons.description, color: Colors.white, size: 20),
+                  child: const Icon(
+                    Icons.description,
+                    color: Colors.white,
+                    size: 20,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 const Expanded(
@@ -713,7 +907,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                 ),
                 // Ticket Info
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
@@ -744,8 +941,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                 const SizedBox(width: 10),
                 // Sync Status
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: _isSynced ? Colors.green : Colors.orange,
                     borderRadius: BorderRadius.circular(20),
@@ -789,9 +988,7 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                         ),
                       ),
                       const SizedBox(width: 16),
-                      Expanded(
-                        child: _buildTicketTypeSelector(),
-                      ),
+                      Expanded(child: _buildTicketTypeSelector()),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -927,8 +1124,9 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: const Color(0xFFF5F5F5),
-              borderRadius:
-                  const BorderRadius.vertical(bottom: Radius.circular(16)),
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(16),
+              ),
               border: Border(top: BorderSide(color: Colors.grey.shade300)),
             ),
             child: Row(
@@ -1055,8 +1253,12 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     );
   }
 
-  Widget _buildInfoRow(String label, String value,
-      {IconData? icon, Color? color}) {
+  Widget _buildInfoRow(
+    String label,
+    String value, {
+    IconData? icon,
+    Color? color,
+  }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
@@ -1104,7 +1306,9 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
             decoration: BoxDecoration(
               color: Colors.grey.shade100,
-              borderRadius: const BorderRadius.horizontal(left: Radius.circular(7)),
+              borderRadius: const BorderRadius.horizontal(
+                left: Radius.circular(7),
+              ),
             ),
             child: Row(
               children: [
@@ -1165,7 +1369,9 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
             decoration: BoxDecoration(
               color: Colors.grey.shade100,
-              borderRadius: const BorderRadius.horizontal(left: Radius.circular(7)),
+              borderRadius: const BorderRadius.horizontal(
+                left: Radius.circular(7),
+              ),
             ),
             child: Row(
               children: [
@@ -1193,8 +1399,12 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 style: const TextStyle(fontSize: 12, color: Colors.black87),
                 items: items
-                    .map((item) =>
-                        DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 12))))
+                    .map(
+                      (item) => DropdownMenuItem(
+                        value: item,
+                        child: Text(item, style: const TextStyle(fontSize: 12)),
+                      ),
+                    )
                     .toList(),
                 onChanged: onChanged,
               ),
@@ -1223,7 +1433,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
       children: [
         SizedBox(
           width: 50,
-          child: Text(label, style: const TextStyle(fontSize: 10), overflow: TextOverflow.ellipsis),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 10),
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         Expanded(
           child: TextField(
@@ -1234,8 +1448,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
             style: const TextStyle(fontSize: 12),
             decoration: InputDecoration(
               isDense: true,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 6,
+                vertical: 6,
+              ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(4),
               ),
@@ -1294,7 +1510,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                     color: Colors.white.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Icon(Icons.history, color: Colors.white, size: 18),
+                  child: const Icon(
+                    Icons.history,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 const Expanded(
@@ -1325,7 +1545,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                     color: Colors.white.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Icon(Icons.search, color: Colors.white, size: 16),
+                  child: const Icon(
+                    Icons.search,
+                    color: Colors.white,
+                    size: 16,
+                  ),
                 ),
               ],
             ),
@@ -1336,20 +1560,87 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
               scrollDirection: Axis.horizontal,
               child: SingleChildScrollView(
                 child: DataTable(
-                  headingRowColor: WidgetStateProperty.all(const Color(0xFFF5F5F5)),
+                  headingRowColor: WidgetStateProperty.all(
+                    const Color(0xFFF5F5F5),
+                  ),
                   dataRowMinHeight: 36,
                   dataRowMaxHeight: 36,
                   columnSpacing: 16,
                   horizontalMargin: 12,
                   columns: const [
-                    DataColumn(label: Text('Phiếu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
-                    DataColumn(label: Text('Biển số', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
-                    DataColumn(label: Text('Loại', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
-                    DataColumn(label: Text('Tổng (kg)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), numeric: true),
-                    DataColumn(label: Text('Bì (kg)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), numeric: true),
-                    DataColumn(label: Text('Hàng (kg)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)), numeric: true),
-                    DataColumn(label: Text('Thời gian', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
-                    DataColumn(label: Icon(Icons.cloud_sync, size: 16, color: Color(0xFF546E7A))),
+                    DataColumn(
+                      label: Text(
+                        'Phiếu',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Biển số',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Loại',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Tổng (kg)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      numeric: true,
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Bì (kg)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      numeric: true,
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Hàng (kg)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      numeric: true,
+                    ),
+                    DataColumn(
+                      label: Text(
+                        'Thời gian',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    DataColumn(
+                      label: Icon(
+                        Icons.cloud_sync,
+                        size: 16,
+                        color: Color(0xFF546E7A),
+                      ),
+                    ),
                   ],
                   rows: _buildTableRows(),
                 ),
@@ -1362,18 +1653,30 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: const Color(0xFFFAFAFA),
-              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(16),
+              ),
               border: Border(top: BorderSide(color: Colors.grey.shade200)),
             ),
             child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF37474F),
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text('LOG', style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'LOG',
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1413,48 +1716,116 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   List<DataRow> _buildTableRows() {
-    // Sample data
-    return [
-      _buildDataRow('PC-001', '51A-12345', 'Nhập', 25000, 10000, 15000,
-          '09:30', true),
-      _buildDataRow('PC-002', '30H-67890', 'Xuất', 32000, 12000, 20000,
-          '09:15', false),
-      _buildDataRow('PC-003', '51B-11111', 'Nhập', 28000, 9000, 19000,
-          '16:45', true),
-      _buildDataRow('PC-004', '29A-22222', 'Xuất', 22000, 8500, 13500,
-          '15:30', true),
-    ];
+    // Real data from local repository
+    final tickets = WeighingTicketRepositoryImpl.instance.tickets;
+
+    if (tickets.isEmpty) {
+      // Return empty row with message
+      return [
+        DataRow(
+          cells: [
+            const DataCell(
+              Text(
+                'Chưa có phiếu cân',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontStyle: FontStyle.italic,
+                  color: Colors.grey,
+                ),
+              ),
+            ),
+            const DataCell(Text('')),
+            const DataCell(Text('')),
+            const DataCell(Text('')),
+            const DataCell(Text('')),
+            const DataCell(Text('')),
+            const DataCell(Text('')),
+            const DataCell(Text('')),
+          ],
+        ),
+      ];
+    }
+
+    return tickets.take(10).map((ticket) {
+      final weighTime = ticket.firstWeightTime ?? ticket.createdAt;
+      final time =
+          '${weighTime.hour.toString().padLeft(2, '0')}:${weighTime.minute.toString().padLeft(2, '0')}';
+      final type = ticket.weighingType.value == 'incoming'
+          ? 'Nhập'
+          : (ticket.weighingType.value == 'outgoing' ? 'Xuất' : 'Dịch vụ');
+
+      return _buildDataRow(
+        ticket.ticketNumber,
+        ticket.licensePlate,
+        type,
+        ticket.firstWeight ?? 0,
+        ticket.secondWeight ?? 0,
+        ticket.netWeight ?? 0,
+        time,
+        ticket.isSynced,
+      );
+    }).toList();
   }
 
-  DataRow _buildDataRow(String ticket, String plate, String type, double gross,
-      double tare, double net, String time, bool synced) {
+  DataRow _buildDataRow(
+    String ticket,
+    String plate,
+    String type,
+    double gross,
+    double tare,
+    double net,
+    String time,
+    bool synced,
+  ) {
     return DataRow(
       cells: [
-        DataCell(Text(ticket, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500))),
-        DataCell(Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFF8E1),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: const Color(0xFFFFB300)),
+        DataCell(
+          Text(
+            ticket,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
           ),
-          child: Text(plate,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFE65100))),
-        )),
-        DataCell(_buildTypeChip(type)),
-        DataCell(Text('${gross.toInt()}', style: const TextStyle(fontSize: 11))),
-        DataCell(Text('${tare.toInt()}', style: const TextStyle(fontSize: 11))),
-        DataCell(Text('${net.toInt()}',
-            style: const TextStyle(
+        ),
+        DataCell(
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E1),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: const Color(0xFFFFB300)),
+            ),
+            child: Text(
+              plate,
+              style: const TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
-                color: Color(0xFF2E7D32)))),
+                color: Color(0xFFE65100),
+              ),
+            ),
+          ),
+        ),
+        DataCell(_buildTypeChip(type)),
+        DataCell(
+          Text('${gross.toInt()}', style: const TextStyle(fontSize: 11)),
+        ),
+        DataCell(Text('${tare.toInt()}', style: const TextStyle(fontSize: 11))),
+        DataCell(
+          Text(
+            '${net.toInt()}',
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF2E7D32),
+            ),
+          ),
+        ),
         DataCell(Text(time, style: const TextStyle(fontSize: 11))),
-        DataCell(Icon(
-          synced ? Icons.cloud_done : Icons.cloud_off,
-          size: 16,
-          color: synced ? const Color(0xFF43A047) : const Color(0xFFFF9800),
-        )),
+        DataCell(
+          Icon(
+            synced ? Icons.cloud_done : Icons.cloud_off,
+            size: 16,
+            color: synced ? const Color(0xFF43A047) : const Color(0xFFFF9800),
+          ),
+        ),
       ],
     );
   }
@@ -1487,7 +1858,14 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
         children: [
           Icon(icon, size: 10, color: color),
           const SizedBox(width: 2),
-          Text(type, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600)),
+          Text(
+            type,
+            style: TextStyle(
+              fontSize: 10,
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -1498,10 +1876,20 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
         children: [
-          Text('[$time] ',
-              style: const TextStyle(fontSize: 9, fontFamily: 'monospace', color: Colors.grey)),
+          Text(
+            '[$time] ',
+            style: const TextStyle(
+              fontSize: 9,
+              fontFamily: 'monospace',
+              color: Colors.grey,
+            ),
+          ),
           Expanded(
-            child: Text(message, style: const TextStyle(fontSize: 9), overflow: TextOverflow.ellipsis),
+            child: Text(
+              message,
+              style: const TextStyle(fontSize: 9),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
@@ -1529,11 +1917,61 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     });
   }
 
-  void _onSave() {
-    // TODO: Save to local database
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đã lưu phiếu cân')),
+  void _onSave() async {
+    // Create ticket from current data
+    final ticket = WeighingTicket(
+      ticketNumber: _ticketNumber,
+      licensePlate: _licensePlateController.text.isNotEmpty
+          ? _licensePlateController.text
+          : 'N/A',
+      driverName: '',
+      productName: _productType.isNotEmpty ? _productType : 'Hàng hóa',
+      vehicleType: 'Xe tải',
+      firstWeight: _grossWeight,
+      secondWeight: _tareWeight,
+      netWeight: _netWeight,
+      firstWeightTime: DateTime.now(),
+      status: WeighingStatus.completed,
+      weighingType: _ticketType == 'incoming'
+          ? WeighingType.incoming
+          : WeighingType.outgoing,
+      note: _noteController.text,
+      unitPrice: _unitPrice,
+      totalAmount: _totalAmount,
     );
+
+    try {
+      // Save to repository
+      await WeighingTicketRepositoryImpl.instance.insert(ticket);
+      LoggingService.instance.info(
+        'WeighingScreen',
+        'Ticket saved: ${ticket.ticketNumber}',
+      );
+
+      if (mounted) {
+        setState(() {}); // Refresh to show new ticket in table
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Đã lưu phiếu cân'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      LoggingService.instance.error(
+        'WeighingScreen',
+        'Failed to save ticket',
+        error: e,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Lỗi lưu phiếu: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   void _onWeighGross() {
@@ -1555,17 +1993,17 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     try {
       final screenshot = await _player.screenshot();
       if (screenshot != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đã chụp ảnh từ camera')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Đã chụp ảnh từ camera')));
         // TODO: Save screenshot and trigger license plate recognition
       }
     } catch (e) {
       debugPrint('Failed to capture: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Không thể chụp ảnh')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Không thể chụp ảnh')));
       }
     }
   }
@@ -1582,34 +2020,118 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     _licensePlateController.clear();
   }
 
-  void _onPrint() {
-    // TODO: Print ticket
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đang in phiếu...'), duration: Duration(seconds: 2)),
+  void _onPrint() async {
+    // Create ticket from current data
+    final ticket = WeighingTicket(
+      ticketNumber: _ticketNumber,
+      licensePlate: _licensePlateController.text.isNotEmpty
+          ? _licensePlateController.text
+          : 'N/A',
+      driverName: '',
+      productName: _productType.isNotEmpty ? _productType : 'Hàng hóa',
+      vehicleType: 'Xe tải',
+      firstWeight: _grossWeight,
+      secondWeight: _tareWeight,
+      netWeight: _netWeight,
+      firstWeightTime: DateTime.now(),
+      status: WeighingStatus.completed,
+      weighingType: _ticketType == 'incoming'
+          ? WeighingType.incoming
+          : WeighingType.outgoing,
+      note: _noteController.text,
+      unitPrice: _unitPrice,
+      totalAmount: _totalAmount,
     );
+
+    try {
+      // Show printing dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đang chuẩn bị in phiếu...'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+
+      // Get company info from settings (for future use in printWeighingTicket)
+      // final settings = context.read<SettingsProvider>();
+
+      // Print the ticket
+      final success = await PrintService.instance.printWeighingTicket(ticket);
+
+      if (mounted) {
+        if (success) {
+          LoggingService.instance.info(
+            'WeighingScreen',
+            'Ticket printed: ${ticket.ticketNumber}',
+          );
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('In phiếu thành công'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Hủy in phiếu'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      LoggingService.instance.error(
+        'WeighingScreen',
+        'Failed to print ticket',
+        error: e,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Lỗi in phiếu: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _onSync() async {
+    // Reset sync state if stuck
+    if (SyncService.instance.isSyncing) {
+      debugPrint('WeighingScreen: Sync was stuck, resetting...');
+      SyncService.instance.resetSyncState();
+    }
+
     // Show syncing indicator
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đang đồng bộ dữ liệu...'), duration: Duration(seconds: 1)),
+      const SnackBar(
+        content: Text('Đang đồng bộ dữ liệu...'),
+        duration: Duration(seconds: 1),
+      ),
     );
-    
+
+    // Log current settings
+    final settings = context.read<SettingsProvider>();
+    debugPrint('WeighingScreen: Syncing with URL=${settings.azureApiUrl}, hasKey=${settings.azureFunctionKey.isNotEmpty}');
+
     // Sync using SyncService
     final repo = WeighingTicketRepositoryImpl.instance;
     final result = await SyncService.instance.syncData(
       getUnsyncedTickets: () => repo.getUnsynced(),
       markAsSynced: (ids, azureIds) => repo.markAsSynced(ids, azureIds),
     );
-    
+
     if (mounted) {
       setState(() => _isSynced = result.success);
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(result.success 
-            ? 'Đồng bộ thành công: ${result.syncedCount} phiếu' 
-            : 'Lỗi: ${result.message}'),
+          content: Text(
+            result.success
+                ? 'Đồng bộ thành công: ${result.syncedCount} phiếu'
+                : 'Lỗi: ${result.message}',
+          ),
           backgroundColor: result.success ? Colors.green : Colors.red,
           duration: const Duration(seconds: 3),
         ),
@@ -1620,7 +2142,11 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   void _onOpenBarrier() {
     // TODO: Open barrier
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đã mở barrier'), backgroundColor: Colors.orange, duration: Duration(seconds: 2)),
+      const SnackBar(
+        content: Text('Đã mở barrier'),
+        backgroundColor: Colors.orange,
+        duration: Duration(seconds: 2),
+      ),
     );
   }
 }

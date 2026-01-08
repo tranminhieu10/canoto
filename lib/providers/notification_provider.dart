@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:mqtt_client/mqtt_client.dart';
 import 'package:canoto/services/signalr/signalr_service.dart';
 import 'package:canoto/services/mqtt/mqtt_service.dart';
 
@@ -16,6 +16,7 @@ class NotificationProvider extends ChangeNotifier {
   StreamSubscription? _weighingUpdateSubscription;
   StreamSubscription? _signalRConnectionSubscription;
   StreamSubscription? _mqttConnectionSubscription;
+  StreamSubscription? _mqttMessageSubscription;
   
   // State
   final List<AppNotification> _notifications = [];
@@ -34,6 +35,9 @@ class NotificationProvider extends ChangeNotifier {
   bool get isMqttConnected => _isMqttConnected;
   bool get isConnected => _isSignalRConnected || _isMqttConnected;
 
+  /// Whether to auto-connect to cloud services (disable in development without Azure)
+  static const bool _autoConnectToCloud = true; // Azure is now configured!
+
   /// Initialize the provider
   Future<void> initialize() async {
     debugPrint('NotificationProvider: Initializing...');
@@ -44,8 +48,12 @@ class NotificationProvider extends ChangeNotifier {
     // Subscribe to MQTT events
     _subscribeToMqtt();
     
-    // Connect to services
-    await _connectServices();
+    // Connect to services (only if auto-connect is enabled)
+    if (_autoConnectToCloud) {
+      await _connectServices();
+    } else {
+      debugPrint('NotificationProvider: Cloud services disabled (development mode)');
+    }
     
     debugPrint('NotificationProvider: Initialized');
   }
@@ -129,7 +137,7 @@ class NotificationProvider extends ChangeNotifier {
   /// Subscribe to MQTT events
   void _subscribeToMqtt() {
     // MQTT messages
-    _mqttService.messageStream.listen(
+    _mqttMessageSubscription = _mqttService.messageStream.listen(
       (message) {
         final json = message.payloadAsJson;
         if (json != null) {
@@ -330,6 +338,7 @@ class NotificationProvider extends ChangeNotifier {
     _weighingUpdateSubscription?.cancel();
     _signalRConnectionSubscription?.cancel();
     _mqttConnectionSubscription?.cancel();
+    _mqttMessageSubscription?.cancel();
     super.dispose();
   }
 }

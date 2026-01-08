@@ -9,8 +9,11 @@ class TicketListScreen extends StatefulWidget {
 }
 
 class _TicketListScreenState extends State<TicketListScreen> {
+  // ignore: unused_field
   DateTime _fromDate = DateTime.now().subtract(const Duration(days: 7));
+  // ignore: unused_field
   DateTime _toDate = DateTime.now();
+  // ignore: unused_field
   String _searchText = '';
 
   @override
@@ -202,7 +205,7 @@ class _TicketListScreenState extends State<TicketListScreen> {
     }
     return Chip(
       label: Text(label, style: const TextStyle(fontSize: 12)),
-      backgroundColor: color.withOpacity(0.2),
+      backgroundColor: color.withValues(alpha: 0.2),
       side: BorderSide(color: color),
     );
   }

@@ -25,7 +25,10 @@ dependencies:
   dio: ^5.7.0
   
   # Serial port communication (for scale)
-  # flutter_libserialport: ^0.4.0
+  flutter_libserialport: ^0.4.0
+  
+  # Excel export
+  excel: ^4.0.6
   
   # Printing
   printing: ^5.13.4

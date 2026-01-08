@@ -58,11 +58,6 @@ class SignalRService {
               accessTokenFactory: accessToken != null 
                   ? () async => accessToken 
                   : null,
-              logging: (level, message) {
-                if (AzureConfig.isDevelopment) {
-                  debugPrint('SignalR: $message');
-                }
-              },
             ),
           )
           .withAutomaticReconnect(
@@ -144,7 +139,11 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final data = args[0] as Map<String, dynamic>;
+      final data = args[0];
+      if (data is! Map<String, dynamic>) {
+        debugPrint('SignalRService: Invalid notification data type');
+        return;
+      }
       final notification = NotificationMessage.fromJson(data);
       _notificationController.add(notification);
       debugPrint('SignalRService: Notification received: ${notification.title}');
@@ -158,7 +157,11 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final data = args[0] as Map<String, dynamic>;
+      final data = args[0];
+      if (data is! Map<String, dynamic>) {
+        debugPrint('SignalRService: Invalid weighing update data type');
+        return;
+      }
       final update = WeighingUpdate.fromJson(data);
       _weighingUpdateController.add(update);
       debugPrint('SignalRService: Weighing update: ${update.ticketNumber}');
@@ -172,7 +175,11 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final data = args[0] as Map<String, dynamic>;
+      final data = args[0];
+      if (data is! Map<String, dynamic>) {
+        debugPrint('SignalRService: Invalid weighing completed data type');
+        return;
+      }
       final update = WeighingUpdate.fromJson(data);
       update.isCompleted = true;
       _weighingUpdateController.add(update);
@@ -187,7 +194,11 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final data = args[0] as Map<String, dynamic>;
+      final data = args[0];
+      if (data is! Map<String, dynamic>) {
+        debugPrint('SignalRService: Invalid alert data type');
+        return;
+      }
       final alert = AlertMessage.fromJson(data);
       _alertController.add(alert);
       debugPrint('SignalRService: Alert received: ${alert.message}');
@@ -201,7 +212,11 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final data = args[0] as Map<String, dynamic>;
+      final data = args[0];
+      if (data is! Map<String, dynamic>) {
+        debugPrint('SignalRService: Invalid emergency alert data type');
+        return;
+      }
       final alert = AlertMessage.fromJson(data);
       alert.priority = AlertPriority.critical;
       _alertController.add(alert);
@@ -216,9 +231,13 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final data = args[0] as Map<String, dynamic>;
+      final data = args[0];
+      if (data is! Map<String, dynamic>) {
+        debugPrint('SignalRService: Invalid device command data type');
+        return;
+      }
       final command = data['command'] as String?;
-      final parameters = data['parameters'] as Map<String, dynamic>?;
+      // final parameters = data['parameters'] as Map<String, dynamic>?;
       
       debugPrint('SignalRService: Device command: $command');
       
@@ -256,7 +275,11 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final data = args[0] as Map<String, dynamic>;
+      final data = args[0];
+      if (data is! Map<String, dynamic>) {
+        debugPrint('SignalRService: Invalid data updated type');
+        return;
+      }
       final dataType = data['type'] as String?;
       debugPrint('SignalRService: Data updated: $dataType');
       // Refresh specific data type
@@ -270,7 +293,8 @@ class SignalRService {
     if (args == null || args.isEmpty) return;
     
     try {
-      final message = args[0] as String?;
+      final rawMessage = args[0];
+      final message = rawMessage is String ? rawMessage : rawMessage?.toString();
       debugPrint('SignalRService: System message: $message');
       
       _notificationController.add(NotificationMessage(
@@ -312,7 +336,7 @@ class SignalRService {
     }
     
     try {
-      await _hubConnection!.invoke(method, args: args);
+      await _hubConnection!.invoke(method, args: args.whereType<Object>().toList());
       debugPrint('SignalRService: Message sent: $method');
     } catch (e) {
       debugPrint('SignalRService: Error sending message: $e');

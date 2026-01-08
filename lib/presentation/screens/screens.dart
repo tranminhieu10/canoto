@@ -1,4 +1,10 @@
 export 'home/home_screen.dart';
 export 'weighing/weighing_screen.dart';
+export 'weighing/weighing_screen_new.dart';
 export 'tickets/ticket_list_screen.dart';
 export 'settings/settings_screen.dart';
+export 'notifications/notifications_screen.dart';
+export 'customers/customers_screen.dart';
+export 'vehicles/vehicles_screen.dart';
+export 'products/products_screen.dart';
+export 'reports/reports_screen.dart';

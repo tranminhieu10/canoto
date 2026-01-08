@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:canoto/presentation/screens/weighing/weighing_screen_new.dart';
 import 'package:canoto/presentation/screens/tickets/ticket_list_screen.dart';
 import 'package:canoto/presentation/screens/settings/settings_screen.dart';
+import 'package:canoto/presentation/screens/customers/customers_screen.dart';
+import 'package:canoto/presentation/screens/vehicles/vehicles_screen.dart';
+import 'package:canoto/presentation/screens/products/products_screen.dart';
+import 'package:canoto/presentation/screens/reports/reports_screen.dart';
 
 /// Màn hình chính - Dashboard
 class HomeScreen extends StatefulWidget {
@@ -90,13 +94,13 @@ class _HomeScreenState extends State<HomeScreen> {
       case 2:
         return const TicketListScreen();
       case 3:
-        return const Center(child: Text('Quản lý khách hàng'));
+        return const CustomersScreen();
       case 4:
-        return const Center(child: Text('Quản lý xe'));
+        return const VehiclesScreen();
       case 5:
-        return const Center(child: Text('Quản lý hàng hóa'));
+        return const ProductsScreen();
       case 6:
-        return const Center(child: Text('Báo cáo'));
+        return const ReportsScreen();
       case 7:
         return const SettingsScreen();
       default:

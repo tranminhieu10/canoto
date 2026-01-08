@@ -9,9 +9,12 @@ class WeighingScreen extends StatefulWidget {
 }
 
 class _WeighingScreenState extends State<WeighingScreen> {
-  double _currentWeight = 0;
+  // ignore: unused_field
+  final double _currentWeight = 0;
+  // ignore: unused_field
   String _licensePlate = '';
-  bool _isStable = false;
+  // ignore: unused_field
+  final bool _isStable = false;
 
   @override
   Widget build(BuildContext context) {

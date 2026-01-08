@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
@@ -27,9 +28,9 @@ class MqttService {
   Timer? _reconnectTimer;
   
   // Message streams
-  final StreamController<MqttMessage> _messageController = 
-      StreamController<MqttMessage>.broadcast();
-  Stream<MqttMessage> get messageStream => _messageController.stream;
+  final StreamController<MqttReceivedData> _messageController = 
+      StreamController<MqttReceivedData>.broadcast();
+  Stream<MqttReceivedData> get messageStream => _messageController.stream;
   
   // Connection status stream
   final StreamController<MqttConnectionState> _connectionController = 
@@ -63,17 +64,16 @@ class MqttService {
       final securityContext = SecurityContext.defaultContext;
       _client!.securityContext = securityContext;
 
-      // Connection message
+      // Connection message - Azure IoT Hub requires MQTT 3.1.1 (protocol version 4)
       final connMessage = MqttConnectMessage()
+          .withProtocolName('MQTT')  // Use 'MQTT' for version 3.1.1, 'MQIsdp' for 3.1
+          .withProtocolVersion(4)    // MQTT 3.1.1 = version 4
           .withClientIdentifier(device)
           .authenticateAs(
             '$host/$device/?api-version=2021-04-12',
             sasToken ?? _generateSasToken(host, device),
           )
-          .withWillTopic('devices/$device/messages/events/')
-          .withWillMessage('{"status":"disconnected"}')
-          .startClean()
-          .withWillQos(MqttQos.atLeastOnce);
+          .startClean();
 
       _client!.connectionMessage = connMessage;
 
@@ -122,31 +122,28 @@ class MqttService {
     _client!.subscribe(twinTopic, MqttQos.atLeastOnce);
     
     // Listen for messages
-    _client!.updates?.listen(_onMessage);
+    _client!.updates?.listen((messages) {
+      for (final message in messages) {
+        final topic = message.topic;
+        final payload = message.payload as MqttPublishMessage;
+        final data = MqttPublishPayload.bytesToStringAsString(
+          payload.payload.message,
+        );
+        
+        debugPrint('MqttService: Received on $topic: $data');
+        
+        _messageController.add(MqttReceivedData(
+          topic: topic,
+          payload: data,
+          timestamp: DateTime.now(),
+        ));
+        
+        // Handle specific message types
+        _handleMessage(topic, data);
+      }
+    });
     
     debugPrint('MqttService: Subscribed to topics');
-  }
-
-  /// Handle incoming messages
-  void _onMessage(List<MqttReceivedMessage<MqttMessage>> messages) {
-    for (final message in messages) {
-      final topic = message.topic;
-      final payload = message.payload as MqttPublishMessage;
-      final data = MqttPublishPayload.bytesToStringAsString(
-        payload.payload.message,
-      );
-      
-      debugPrint('MqttService: Received on $topic: $data');
-      
-      _messageController.add(MqttMessage(
-        topic: topic,
-        payload: data,
-        timestamp: DateTime.now(),
-      ));
-      
-      // Handle specific message types
-      _handleMessage(topic, data);
-    }
   }
 
   /// Process specific message types
@@ -297,10 +294,32 @@ class MqttService {
   }
 
   /// Generate SAS token for IoT Hub authentication
+  /// Uses HMAC-SHA256 to sign the token properly for Azure IoT Hub
   String _generateSasToken(String hostname, String deviceId) {
-    // In production, implement proper SAS token generation
-    // This should be done securely, possibly through a backend service
-    return 'SharedAccessSignature sr=$hostname%2Fdevices%2F$deviceId&sig=YOUR_SIGNATURE&se=EXPIRY';
+    // Use the device key from Azure config
+    final deviceKey = AzureConfig.iotDeviceKey;
+    
+    // Token expiry - 24 hours from now (in seconds since epoch)
+    final expiry = (DateTime.now().millisecondsSinceEpoch ~/ 1000) + 86400;
+    
+    // Resource URI - must be URL encoded
+    final resourceUri = Uri.encodeComponent('$hostname/devices/$deviceId');
+    
+    // String to sign: {resourceUri}\n{expiry}
+    final stringToSign = '$resourceUri\n$expiry';
+    
+    // Decode the Base64 encoded device key
+    final keyBytes = base64Decode(deviceKey);
+    
+    // Compute HMAC-SHA256 signature
+    final hmac = Hmac(sha256, keyBytes);
+    final digest = hmac.convert(utf8.encode(stringToSign));
+    
+    // Base64 encode the signature and URL encode it
+    final signature = Uri.encodeComponent(base64Encode(digest.bytes));
+    
+    // Return the complete SAS token
+    return 'SharedAccessSignature sr=$resourceUri&sig=$signature&se=$expiry';
   }
 
   /// Connection callbacks
@@ -363,13 +382,13 @@ class MqttService {
   }
 }
 
-/// MQTT Message model
-class MqttMessage {
+/// MQTT Received Data model
+class MqttReceivedData {
   final String topic;
   final String payload;
   final DateTime timestamp;
 
-  MqttMessage({
+  MqttReceivedData({
     required this.topic,
     required this.payload,
     required this.timestamp,
