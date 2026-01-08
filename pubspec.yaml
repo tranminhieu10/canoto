@@ -53,6 +53,30 @@ dependencies:
   media_kit: ^1.1.11
   media_kit_video: ^1.2.5
   media_kit_libs_windows_video: ^1.0.10
+  
+  # MQTT for IoT Hub
+  mqtt_client: ^10.2.0
+  
+  # SignalR for real-time notifications
+  signalr_netcore: ^1.3.4
+  
+  # HTTP for image upload
+  http: ^1.2.0
+  
+  # Connectivity check
+  connectivity_plus: ^6.0.5
+  
+  # Local notifications
+  flutter_local_notifications: ^18.0.1
+  
+  # JSON serialization
+  json_annotation: ^4.9.0
+  
+  # Crypto for signing
+  crypto: ^3.0.5
+  
+  # URL launcher
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:

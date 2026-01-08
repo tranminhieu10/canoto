@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:canoto/providers/settings_provider.dart';
 
-/// Màn hình cài đặt
+/// Màn hình cài đặt nâng cao
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -11,6 +13,20 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  int _selectedSection = 0;
+
+  final List<_SettingsSection> _sections = [
+    _SettingsSection('Giao diện', Icons.palette),
+    _SettingsSection('Camera', Icons.videocam),
+    _SettingsSection('Đầu cân', Icons.scale),
+    _SettingsSection('Barrier', Icons.door_front_door),
+    _SettingsSection('Vision Master', Icons.document_scanner),
+    _SettingsSection('Máy in', Icons.print),
+    _SettingsSection('Đồng bộ', Icons.sync),
+    _SettingsSection('Azure Cloud', Icons.cloud),
+    _SettingsSection('Thông báo', Icons.notifications),
+    _SettingsSection('Công ty', Icons.business),
+  ];
 
   @override
   void initState() {
@@ -28,26 +44,303 @@ class _SettingsScreenState extends State<SettingsScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cài đặt'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(icon: Icon(Icons.scale), text: 'Đầu cân'),
-            Tab(icon: Icon(Icons.videocam), text: 'Camera'),
-            Tab(icon: Icon(Icons.fence), text: 'Barrier'),
-            Tab(icon: Icon(Icons.document_scanner), text: 'Vision'),
-            Tab(icon: Icon(Icons.print), text: 'Máy in'),
+        title: const Text('Cài đặt hệ thống'),
+        backgroundColor: Colors.blue.shade700,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.restore),
+            tooltip: 'Khôi phục mặc định',
+            onPressed: _showResetDialog,
+          ),
+        ],
+      ),
+      body: Row(
+        children: [
+          // Left sidebar
+          Container(
+            width: 220,
+            color: Colors.grey.shade100,
+            child: ListView.builder(
+              itemCount: _sections.length,
+              itemBuilder: (context, index) {
+                final section = _sections[index];
+                final isSelected = _selectedSection == index;
+                
+                return ListTile(
+                  leading: Icon(
+                    section.icon,
+                    color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
+                  ),
+                  title: Text(
+                    section.title,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected ? Colors.blue.shade700 : Colors.black87,
+                    ),
+                  ),
+                  selected: isSelected,
+                  selectedTileColor: Colors.blue.shade50,
+                  onTap: () => setState(() => _selectedSection = index),
+                );
+              },
+            ),
+          ),
+          const VerticalDivider(width: 1),
+          // Right content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: _buildSectionContent(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionContent() {
+    switch (_selectedSection) {
+      case 0:
+        return _buildAppearanceSettings();
+      case 1:
+        return _buildCameraSettings();
+      case 2:
+        return _buildScaleSettings();
+      case 3:
+        return _buildBarrierSettings();
+      case 4:
+        return _buildVisionSettings();
+      case 5:
+        return _buildPrinterSettings();
+      case 6:
+        return _buildSyncSettings();
+      case 7:
+        return _buildAzureSettings();
+      case 8:
+        return _buildNotificationSettings();
+      case 9:
+        return _buildCompanySettings();
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildSectionCard({required String title, required List<Widget> children}) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue)),
+            const Divider(),
+            const SizedBox(height: 8),
+            ...children,
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildScaleSettings(),
-          _buildCameraSettings(),
-          _buildBarrierSettings(),
-          _buildVisionSettings(),
-          _buildPrinterSettings(),
+    );
+  }
+
+  Widget _buildAppearanceSettings() {
+    return _buildSectionCard(
+      title: 'Giao diện',
+      children: [
+        ListTile(
+          title: const Text('Chủ đề'),
+          subtitle: const Text('Chọn giao diện sáng hoặc tối'),
+          trailing: DropdownButton<ThemeMode>(
+            value: ThemeMode.light,
+            items: const [
+              DropdownMenuItem(value: ThemeMode.light, child: Text('Sáng')),
+              DropdownMenuItem(value: ThemeMode.dark, child: Text('Tối')),
+              DropdownMenuItem(value: ThemeMode.system, child: Text('Theo hệ thống')),
+            ],
+            onChanged: (mode) {},
+          ),
+        ),
+        ListTile(
+          title: const Text('Ngôn ngữ'),
+          subtitle: const Text('Chọn ngôn ngữ hiển thị'),
+          trailing: DropdownButton<String>(
+            value: 'vi',
+            items: const [
+              DropdownMenuItem(value: 'vi', child: Text('Tiếng Việt')),
+              DropdownMenuItem(value: 'en', child: Text('English')),
+            ],
+            onChanged: (lang) {},
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSyncSettings() {
+    return _buildSectionCard(
+      title: 'Đồng bộ dữ liệu',
+      children: [
+        SwitchListTile(
+          title: const Text('Tự động đồng bộ'),
+          subtitle: const Text('Đồng bộ dữ liệu lên cloud tự động'),
+          value: true,
+          onChanged: (value) {},
+        ),
+        ListTile(
+          title: const Text('Khoảng thời gian đồng bộ'),
+          subtitle: const Text('Mỗi 5 phút'),
+          trailing: DropdownButton<int>(
+            value: 5,
+            items: const [
+              DropdownMenuItem(value: 1, child: Text('1 phút')),
+              DropdownMenuItem(value: 5, child: Text('5 phút')),
+              DropdownMenuItem(value: 10, child: Text('10 phút')),
+              DropdownMenuItem(value: 30, child: Text('30 phút')),
+            ],
+            onChanged: (interval) {},
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            ElevatedButton.icon(
+              icon: const Icon(Icons.sync),
+              label: const Text('Đồng bộ ngay'),
+              onPressed: () {},
+            ),
+            const SizedBox(width: 16),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.backup),
+              label: const Text('Sao lưu'),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+              onPressed: () {},
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAzureSettings() {
+    return _buildSectionCard(
+      title: 'Azure Cloud',
+      children: [
+        const TextField(
+          decoration: InputDecoration(
+            labelText: 'Azure API URL',
+            hintText: 'https://your-api.azurewebsites.net/api',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        const TextField(
+          obscureText: true,
+          decoration: InputDecoration(
+            labelText: 'Function Key',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          title: const Text('IoT Hub'),
+          subtitle: const Text('Kết nối Azure IoT Hub (MQTT)'),
+          value: false,
+          onChanged: (value) {},
+        ),
+        SwitchListTile(
+          title: const Text('SignalR'),
+          subtitle: const Text('Nhận thông báo real-time'),
+          value: true,
+          onChanged: (value) {},
+        ),
+        const SizedBox(height: 16),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.cloud_done),
+          label: const Text('Kiểm tra kết nối Azure'),
+          onPressed: () {},
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNotificationSettings() {
+    return _buildSectionCard(
+      title: 'Thông báo',
+      children: [
+        SwitchListTile(
+          title: const Text('Bật thông báo'),
+          subtitle: const Text('Nhận thông báo từ hệ thống'),
+          value: true,
+          onChanged: (value) {},
+        ),
+        SwitchListTile(
+          title: const Text('Âm thanh'),
+          subtitle: const Text('Phát âm thanh khi có thông báo'),
+          value: true,
+          onChanged: (value) {},
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompanySettings() {
+    return _buildSectionCard(
+      title: 'Thông tin công ty',
+      children: [
+        const TextField(
+          decoration: InputDecoration(
+            labelText: 'Tên công ty',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        const TextField(
+          decoration: InputDecoration(
+            labelText: 'Địa chỉ',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 2,
+        ),
+        const SizedBox(height: 16),
+        const TextField(
+          decoration: InputDecoration(
+            labelText: 'Số điện thoại',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.image),
+          label: const Text('Chọn logo'),
+          onPressed: () {},
+        ),
+      ],
+    );
+  }
+
+  void _showResetDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Khôi phục mặc định'),
+        content: const Text('Bạn có chắc muốn khôi phục tất cả cài đặt về mặc định?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Đã khôi phục cài đặt mặc định')),
+              );
+            },
+            child: const Text('Khôi phục'),
+          ),
         ],
       ),
     );
@@ -316,63 +609,47 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Widget _buildPrinterSettings() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return _buildSectionCard(
+      title: 'Máy in',
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Cấu hình máy in',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  decoration: const InputDecoration(
-                    labelText: 'Máy in',
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'default', child: Text('Máy in mặc định')),
-                  ],
-                  onChanged: (value) {},
-                ),
-                const SizedBox(height: 16),
-                SwitchListTile(
-                  title: const Text('Tự động in sau khi hoàn thành'),
-                  value: false,
-                  onChanged: (value) {},
-                ),
-                const SizedBox(height: 16),
-                const TextField(
-                  decoration: InputDecoration(
-                    labelText: 'Số bản in',
-                    hintText: '1',
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    ElevatedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.print),
-                      label: const Text('In thử'),
-                    ),
-                    const SizedBox(width: 16),
-                    ElevatedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.save),
-                      label: const Text('Lưu'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+        const TextField(
+          decoration: InputDecoration(
+            labelText: 'Tên máy in',
+            hintText: 'Để trống để dùng mặc định',
+            border: OutlineInputBorder(),
           ),
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          title: const Text('In tự động'),
+          subtitle: const Text('Tự động in phiếu sau khi hoàn thành cân'),
+          value: false,
+          onChanged: (value) {},
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            ElevatedButton.icon(
+              icon: const Icon(Icons.print),
+              label: const Text('In thử'),
+              onPressed: () {},
+            ),
+            const SizedBox(width: 16),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.search),
+              label: const Text('Tìm máy in'),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade600),
+              onPressed: () {},
+            ),
+          ],
         ),
       ],
     );
   }
+}
+
+class _SettingsSection {
+  final String title;
+  final IconData icon;
+  _SettingsSection(this.title, this.icon);
 }
