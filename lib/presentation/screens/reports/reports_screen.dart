@@ -1,7 +1,11 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:printing/printing.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:canoto/data/models/weighing_ticket.dart';
 import 'package:canoto/data/models/enums/weighing_enums.dart';
-import 'package:canoto/data/repositories/weighing_ticket_repository_impl.dart';
+import 'package:canoto/data/repositories/weighing_ticket_sqlite_repository.dart';
 
 /// Màn hình báo cáo thống kê
 class ReportsScreen extends StatefulWidget {
@@ -13,24 +17,31 @@ class ReportsScreen extends StatefulWidget {
 
 class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final _repository = WeighingTicketRepositoryImpl.instance;
+  final _repository = WeighingTicketSqliteRepository.instance;
   
   DateTime _startDate = DateTime.now().subtract(const Duration(days: 30));
   DateTime _endDate = DateTime.now();
   
   List<WeighingTicket> _tickets = [];
   bool _isLoading = false;
+  
+  // Bộ lọc tìm kiếm
+  String? _filterCustomer;
+  String? _filterVehicle;
+  String? _filterProduct;
+  final _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadData();
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -45,8 +56,33 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final allTickets = await _repository.getAll();
       setState(() {
         _tickets = allTickets.where((t) {
-          return t.createdAt.isAfter(_startDate.subtract(const Duration(days: 1))) &&
-              t.createdAt.isBefore(_endDate.add(const Duration(days: 1)));
+          // Date filter
+          if (!t.createdAt.isAfter(_startDate.subtract(const Duration(days: 1))) ||
+              !t.createdAt.isBefore(_endDate.add(const Duration(days: 1)))) {
+            return false;
+          }
+          // Customer filter
+          if (_filterCustomer != null && t.customerName != _filterCustomer) {
+            return false;
+          }
+          // Vehicle filter
+          if (_filterVehicle != null && t.licensePlate != _filterVehicle) {
+            return false;
+          }
+          // Product filter
+          if (_filterProduct != null && t.productName != _filterProduct) {
+            return false;
+          }
+          // Search filter
+          final query = _searchController.text.toLowerCase();
+          if (query.isNotEmpty) {
+            return t.ticketNumber.toLowerCase().contains(query) ||
+                t.licensePlate.toLowerCase().contains(query) ||
+                (t.customerName?.toLowerCase().contains(query) ?? false) ||
+                (t.productName?.toLowerCase().contains(query) ?? false) ||
+                (t.driverName?.toLowerCase().contains(query) ?? false);
+          }
+          return true;
         }).toList();
         _isLoading = false;
       });
@@ -60,11 +96,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         title: const Text('Báo cáo & Thống kê'),
         bottom: TabBar(
           controller: _tabController,
+          isScrollable: true,
           tabs: const [
             Tab(icon: Icon(Icons.dashboard), text: 'Tổng quan'),
             Tab(icon: Icon(Icons.bar_chart), text: 'Theo ngày'),
             Tab(icon: Icon(Icons.people), text: 'Khách hàng'),
             Tab(icon: Icon(Icons.local_shipping), text: 'Xe'),
+            Tab(icon: Icon(Icons.inventory_2), text: 'Hàng hóa'),
           ],
         ),
         actions: [
@@ -109,6 +147,95 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ),
           ),
           
+          // Search and filter bar
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Tìm theo mã phiếu, biển số, khách hàng, hàng hóa...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _searchController.clear();
+                                _loadData();
+                              },
+                            )
+                          : null,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                    onSubmitted: (_) => _loadData(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: Badge(
+                    isLabelVisible: _hasActiveFilters,
+                    child: const Icon(Icons.filter_list),
+                  ),
+                  tooltip: 'Bộ lọc nâng cao',
+                  onPressed: _showAdvancedFilters,
+                ),
+              ],
+            ),
+          ),
+          
+          // Active filters chips
+          if (_hasActiveFilters)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  if (_filterCustomer != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Chip(
+                        label: Text('KH: $_filterCustomer'),
+                        onDeleted: () {
+                          setState(() => _filterCustomer = null);
+                          _loadData();
+                        },
+                      ),
+                    ),
+                  if (_filterVehicle != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Chip(
+                        label: Text('Xe: $_filterVehicle'),
+                        onDeleted: () {
+                          setState(() => _filterVehicle = null);
+                          _loadData();
+                        },
+                      ),
+                    ),
+                  if (_filterProduct != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Chip(
+                        label: Text('HH: $_filterProduct'),
+                        onDeleted: () {
+                          setState(() => _filterProduct = null);
+                          _loadData();
+                        },
+                      ),
+                    ),
+                  TextButton.icon(
+                    onPressed: _clearAllFilters,
+                    icon: const Icon(Icons.clear_all, size: 16),
+                    label: const Text('Xóa tất cả'),
+                  ),
+                ],
+              ),
+            ),
+          
           // Tab content
           Expanded(
             child: _isLoading
@@ -120,8 +247,100 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                       _buildDailyTab(),
                       _buildCustomerTab(),
                       _buildVehicleTab(),
+                      _buildProductTab(),
                     ],
                   ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool get _hasActiveFilters => 
+      _filterCustomer != null || 
+      _filterVehicle != null || 
+      _filterProduct != null;
+
+  void _clearAllFilters() {
+    setState(() {
+      _filterCustomer = null;
+      _filterVehicle = null;
+      _filterProduct = null;
+      _searchController.clear();
+    });
+    _loadData();
+  }
+
+  void _showAdvancedFilters() async {
+    // Lấy danh sách unique từ tickets
+    final customers = _tickets.map((t) => t.customerName).whereType<String>().toSet().toList()..sort();
+    final vehicles = _tickets.map((t) => t.licensePlate).toSet().toList()..sort();
+    final products = _tickets.map((t) => t.productName).whereType<String>().toSet().toList()..sort();
+    
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Bộ lọc nâng cao'),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: _filterCustomer,
+                decoration: const InputDecoration(
+                  labelText: 'Khách hàng',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('Tất cả')),
+                  ...customers.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+                ],
+                onChanged: (v) => setState(() => _filterCustomer = v),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: _filterVehicle,
+                decoration: const InputDecoration(
+                  labelText: 'Biển số xe',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('Tất cả')),
+                  ...vehicles.map((v) => DropdownMenuItem(value: v, child: Text(v))),
+                ],
+                onChanged: (v) => setState(() => _filterVehicle = v),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: _filterProduct,
+                decoration: const InputDecoration(
+                  labelText: 'Hàng hóa',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('Tất cả')),
+                  ...products.map((p) => DropdownMenuItem(value: p, child: Text(p))),
+                ],
+                onChanged: (v) => setState(() => _filterProduct = v),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _clearAllFilters();
+              Navigator.pop(context);
+            },
+            child: const Text('Xóa bộ lọc'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _loadData();
+            },
+            child: const Text('Áp dụng'),
           ),
         ],
       ),
@@ -409,6 +628,191 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     );
   }
 
+  /// Tab Hàng hóa/Sản phẩm
+  Widget _buildProductTab() {
+    // Group by product
+    final Map<String, List<WeighingTicket>> groupedByProduct = {};
+    for (final ticket in _tickets) {
+      final productKey = ticket.productName ?? 'Không xác định';
+      groupedByProduct.putIfAbsent(productKey, () => []).add(ticket);
+    }
+    
+    final sortedProducts = groupedByProduct.entries.toList()
+      ..sort((a, b) {
+        final aWeight = a.value.fold<double>(0, (sum, t) => sum + (t.netWeight ?? 0));
+        final bWeight = b.value.fold<double>(0, (sum, t) => sum + (t.netWeight ?? 0));
+        return bWeight.compareTo(aWeight);
+      });
+    
+    if (sortedProducts.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.inventory_2_outlined, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text('Không có dữ liệu hàng hóa', style: TextStyle(color: Colors.grey)),
+          ],
+        ),
+      );
+    }
+    
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: sortedProducts.length,
+      itemBuilder: (context, index) {
+        final entry = sortedProducts[index];
+        final productTickets = entry.value;
+        final completedTickets = productTickets.where((t) => t.status == WeighingStatus.completed);
+        final totalWeight = completedTickets.fold<double>(0, (sum, t) => sum + (t.netWeight ?? 0));
+        final totalAmount = completedTickets.fold<double>(0, (sum, t) => sum + (t.totalAmount ?? 0));
+        final totalAllWeight = _tickets.fold<double>(0, (sum, t) => sum + (t.netWeight ?? 0));
+        final percentage = totalAllWeight > 0 ? (totalWeight / totalAllWeight) * 100 : 0;
+        
+        return Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundColor: _getProductColor(index),
+              child: Icon(
+                _getProductIcon(entry.key),
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+            title: Text(entry.key, style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${productTickets.length} phiếu cân'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: LinearProgressIndicator(
+                        value: percentage / 100,
+                        backgroundColor: Colors.grey.shade200,
+                        valueColor: AlwaysStoppedAnimation(_getProductColor(index)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${percentage.toStringAsFixed(1)}%',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            trailing: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${(totalWeight / 1000).toStringAsFixed(2)} tấn',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                if (totalAmount > 0)
+                  Text(
+                    _formatCurrencyShort(totalAmount),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.secondary,
+                    ),
+                  ),
+              ],
+            ),
+            isThreeLine: true,
+            onTap: () => _showProductDetail(entry.key, productTickets),
+          ),
+        );
+      },
+    );
+  }
+
+  Color _getProductColor(int index) {
+    final colors = [
+      Colors.blue,
+      Colors.green,
+      Colors.orange,
+      Colors.purple,
+      Colors.teal,
+      Colors.red,
+      Colors.indigo,
+      Colors.amber,
+    ];
+    return colors[index % colors.length];
+  }
+
+  IconData _getProductIcon(String productName) {
+    final lower = productName.toLowerCase();
+    if (lower.contains('cá') || lower.contains('fish')) return Icons.set_meal;
+    if (lower.contains('tôm') || lower.contains('shrimp')) return Icons.water;
+    if (lower.contains('thức ăn') || lower.contains('feed')) return Icons.grass;
+    if (lower.contains('phân') || lower.contains('fertilizer')) return Icons.eco;
+    return Icons.inventory_2;
+  }
+
+  void _showProductDetail(String productName, List<WeighingTicket> tickets) {
+    final completedTickets = tickets.where((t) => t.status == WeighingStatus.completed).toList();
+    final totalWeight = completedTickets.fold<double>(0, (sum, t) => sum + (t.netWeight ?? 0));
+    final totalAmount = completedTickets.fold<double>(0, (sum, t) => sum + (t.totalAmount ?? 0));
+    final avgWeight = completedTickets.isNotEmpty ? totalWeight / completedTickets.length : 0;
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.inventory_2),
+            const SizedBox(width: 8),
+            Expanded(child: Text(productName)),
+          ],
+        ),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDetailRow('Tổng phiếu cân:', '${tickets.length}'),
+              _buildDetailRow('Hoàn thành:', '${completedTickets.length}'),
+              _buildDetailRow('Tổng khối lượng:', '${(totalWeight / 1000).toStringAsFixed(2)} tấn'),
+              _buildDetailRow('KL trung bình:', '${avgWeight.toStringAsFixed(0)} kg/phiếu'),
+              _buildDetailRow('Tổng tiền:', _formatCurrency(totalAmount)),
+              const Divider(),
+              const Text('Khách hàng mua nhiều nhất:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              ..._getTopCustomersForProduct(tickets).take(3).map((e) => Padding(
+                padding: const EdgeInsets.only(left: 16, bottom: 4),
+                child: Text('• ${e.key}: ${(e.value / 1000).toStringAsFixed(2)} tấn'),
+              )),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<MapEntry<String, double>> _getTopCustomersForProduct(List<WeighingTicket> tickets) {
+    final Map<String, double> customerWeights = {};
+    for (final ticket in tickets) {
+      final customer = ticket.customerName ?? 'Không xác định';
+      customerWeights[customer] = (customerWeights[customer] ?? 0) + (ticket.netWeight ?? 0);
+    }
+    final sorted = customerWeights.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted;
+  }
+
   Widget _buildSummaryCard(String title, String value, IconData icon, Color color) {
     return Card(
       child: Padding(
@@ -626,9 +1030,210 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
-  void _printReport() {
+  Future<void> _printReport() async {
+    if (_tickets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Không có dữ liệu để in báo cáo')),
+      );
+      return;
+    }
+    
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đang chuẩn bị báo cáo để in...')),
+      const SnackBar(content: Text('Đang chuẩn bị báo cáo...')),
+    );
+    
+    try {
+      final pdf = await _generateReportPdf();
+      await Printing.layoutPdf(
+        onLayout: (_) async => pdf,
+        name: 'BaoCao_${_formatDate(_startDate)}_${_formatDate(_endDate)}',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi in báo cáo: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+  
+  Future<Uint8List> _generateReportPdf() async {
+    final pdf = pw.Document();
+    
+    // Thống kê
+    final completedTickets = _tickets.where((t) => t.status == WeighingStatus.completed).toList();
+    final totalWeight = completedTickets.fold<double>(0, (sum, t) => sum + (t.netWeight ?? 0));
+    final totalAmount = completedTickets.fold<double>(0, (sum, t) => sum + (t.totalAmount ?? 0));
+    final incoming = _tickets.where((t) => t.weighingType == WeighingType.incoming).length;
+    final outgoing = _tickets.where((t) => t.weighingType == WeighingType.outgoing).length;
+    
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(40),
+        header: (context) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Center(
+              child: pw.Text(
+                'BÁO CÁO THỐNG KÊ CÂN XE',
+                style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            pw.Center(
+              child: pw.Text(
+                'Từ ${_formatDate(_startDate)} đến ${_formatDate(_endDate)}',
+                style: const pw.TextStyle(fontSize: 12),
+              ),
+            ),
+            pw.SizedBox(height: 20),
+            pw.Divider(thickness: 2),
+          ],
+        ),
+        build: (context) => [
+          // Tổng quan
+          pw.Container(
+            padding: const pw.EdgeInsets.all(16),
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: PdfColors.grey300),
+              borderRadius: pw.BorderRadius.circular(8),
+            ),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
+              children: [
+                _buildPdfStatItem('Tổng phiếu cân', _tickets.length.toString()),
+                _buildPdfStatItem('Hoàn thành', completedTickets.length.toString()),
+                _buildPdfStatItem('Tổng KL (tấn)', (totalWeight / 1000).toStringAsFixed(2)),
+                _buildPdfStatItem('Tổng tiền', _formatCurrencyShort(totalAmount)),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 16),
+          
+          // Phân loại
+          pw.Row(
+            children: [
+              pw.Expanded(
+                child: pw.Container(
+                  padding: const pw.EdgeInsets.all(12),
+                  decoration: pw.BoxDecoration(
+                    color: PdfColors.green50,
+                    borderRadius: pw.BorderRadius.circular(8),
+                  ),
+                  child: pw.Column(
+                    children: [
+                      pw.Text('CÂN VÀO', style: const pw.TextStyle(fontSize: 10)),
+                      pw.Text(incoming.toString(), style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+              pw.SizedBox(width: 16),
+              pw.Expanded(
+                child: pw.Container(
+                  padding: const pw.EdgeInsets.all(12),
+                  decoration: pw.BoxDecoration(
+                    color: PdfColors.red50,
+                    borderRadius: pw.BorderRadius.circular(8),
+                  ),
+                  child: pw.Column(
+                    children: [
+                      pw.Text('CÂN RA', style: const pw.TextStyle(fontSize: 10)),
+                      pw.Text(outgoing.toString(), style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 24),
+          
+          // Bảng chi tiết
+          pw.Text('DANH SÁCH PHIỀU CÂN', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 12),
+          
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            columnWidths: {
+              0: const pw.FlexColumnWidth(1.5),
+              1: const pw.FlexColumnWidth(1.2),
+              2: const pw.FlexColumnWidth(2),
+              3: const pw.FlexColumnWidth(1),
+              4: const pw.FlexColumnWidth(1),
+              5: const pw.FlexColumnWidth(1),
+            },
+            children: [
+              // Header
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                children: [
+                  _buildPdfTableHeader('Số phiếu'),
+                  _buildPdfTableHeader('Biển số'),
+                  _buildPdfTableHeader('Khách hàng'),
+                  _buildPdfTableHeader('Cân 1 (kg)'),
+                  _buildPdfTableHeader('Cân 2 (kg)'),
+                  _buildPdfTableHeader('KL (kg)'),
+                ],
+              ),
+              // Data rows
+              ..._tickets.take(50).map((t) => pw.TableRow(
+                children: [
+                  _buildPdfTableCell(t.ticketNumber),
+                  _buildPdfTableCell(t.licensePlate),
+                  _buildPdfTableCell(t.customerName ?? '-'),
+                  _buildPdfTableCell(t.firstWeight?.toStringAsFixed(0) ?? '-'),
+                  _buildPdfTableCell(t.secondWeight?.toStringAsFixed(0) ?? '-'),
+                  _buildPdfTableCell(t.netWeight?.toStringAsFixed(0) ?? '-'),
+                ],
+              )),
+            ],
+          ),
+          
+          if (_tickets.length > 50)
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 8),
+              child: pw.Text(
+                '... và ${_tickets.length - 50} phiếu khác',
+                style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey),
+              ),
+            ),
+        ],
+        footer: (context) => pw.Container(
+          alignment: pw.Alignment.centerRight,
+          margin: const pw.EdgeInsets.only(top: 10),
+          child: pw.Text(
+            'Trang ${context.pageNumber}/${context.pagesCount} - In lúc: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year} ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+            style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey),
+          ),
+        ),
+      ),
+    );
+    
+    return pdf.save();
+  }
+  
+  pw.Widget _buildPdfStatItem(String label, String value) {
+    return pw.Column(
+      children: [
+        pw.Text(value, style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 4),
+        pw.Text(label, style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+      ],
+    );
+  }
+  
+  pw.Widget _buildPdfTableHeader(String text) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(6),
+      child: pw.Text(text, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold), textAlign: pw.TextAlign.center),
+    );
+  }
+  
+  pw.Widget _buildPdfTableCell(String text) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(6),
+      child: pw.Text(text, style: const pw.TextStyle(fontSize: 9), textAlign: pw.TextAlign.center),
     );
   }
 
@@ -672,5 +1277,32 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       return '${(value / 1000).toStringAsFixed(0)}K';
     }
     return value.toStringAsFixed(0);
+  }
+
+  String _formatCurrency(double value) {
+    final formatted = value.toStringAsFixed(0);
+    final buffer = StringBuffer();
+    final length = formatted.length;
+    for (int i = 0; i < length; i++) {
+      buffer.write(formatted[i]);
+      final remaining = length - i - 1;
+      if (remaining > 0 && remaining % 3 == 0) {
+        buffer.write(',');
+      }
+    }
+    return '${buffer.toString()} đ';
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
   }
 }

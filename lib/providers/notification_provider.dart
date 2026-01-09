@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:canoto/services/signalr/signalr_service.dart';
 import 'package:canoto/services/mqtt/mqtt_service.dart';
+import 'package:canoto/services/audio/audio_service.dart';
 
 /// Notification Provider - Manages app notifications and real-time updates
 class NotificationProvider extends ChangeNotifier {
   // Services
   final SignalRService _signalRService = SignalRService.instance;
   final MqttService _mqttService = MqttService.instance;
+  final AudioService _audioService = AudioService.instance;
   
   // Subscriptions
   StreamSubscription? _notificationSubscription;
@@ -176,7 +178,7 @@ class NotificationProvider extends ChangeNotifier {
   }
 
   /// Add notification
-  void _addNotification(AppNotification notification) {
+  void _addNotification(AppNotification notification, {bool playSound = true}) {
     _notifications.insert(0, notification);
     if (!notification.isRead) {
       _unreadCount++;
@@ -187,17 +189,48 @@ class NotificationProvider extends ChangeNotifier {
       _notifications.removeLast();
     }
     
+    // Play sound and announce based on notification type
+    if (playSound && _audioService.isInitialized) {
+      _playNotificationSound(notification);
+    }
+    
     notifyListeners();
     debugPrint('NotificationProvider: Added notification: ${notification.title}');
   }
 
+  /// Play sound based on notification type
+  Future<void> _playNotificationSound(AppNotification notification) async {
+    switch (notification.type) {
+      case AppNotificationType.success:
+        await _audioService.playSuccessSound();
+        break;
+      case AppNotificationType.warning:
+        await _audioService.playWarningSound();
+        break;
+      case AppNotificationType.error:
+        await _audioService.playErrorSound();
+        break;
+      case AppNotificationType.weighing:
+        await _audioService.playWeighingCompleteSound();
+        break;
+      default:
+        await _audioService.playNotificationSound();
+    }
+  }
+
   /// Add alert
-  void _addAlert(AppNotification alert) {
+  void _addAlert(AppNotification alert, {bool playSound = true}) {
     _alerts.insert(0, alert);
     
     // Limit to 50 alerts
     if (_alerts.length > 50) {
       _alerts.removeLast();
+    }
+    
+    // Play alert sound and announce
+    if (playSound && _audioService.isInitialized) {
+      final isEmergency = alert.priority == AppNotificationPriority.critical;
+      _audioService.announceAlert(alert.message, isEmergency: isEmergency);
     }
     
     notifyListeners();

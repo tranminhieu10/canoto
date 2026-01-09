@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:canoto/data/models/product.dart';
-import 'package:canoto/data/repositories/product_repository_impl.dart';
+import 'package:canoto/data/repositories/product_sqlite_repository.dart';
 
 /// Màn hình quản lý hàng hóa/sản phẩm
 class ProductsScreen extends StatefulWidget {
@@ -11,15 +11,19 @@ class ProductsScreen extends StatefulWidget {
 }
 
 class _ProductsScreenState extends State<ProductsScreen> {
-  final _repository = ProductRepositoryImpl.instance;
+  final _repository = ProductSqliteRepository.instance;
   final _searchController = TextEditingController();
   
   List<Product> _products = [];
   List<Product> _filteredProducts = [];
+  List<String> _categories = [];
   bool _showInactive = false;
   String? _selectedCategory;
   String _sortBy = 'name';
   bool _sortAsc = true;
+  bool _isLoading = true;
+  int _totalCount = 0;
+  int _activeCount = 0;
 
   @override
   void initState() {
@@ -33,9 +37,20 @@ class _ProductsScreenState extends State<ProductsScreen> {
     super.dispose();
   }
 
-  void _loadProducts() {
+  Future<void> _loadProducts() async {
+    setState(() => _isLoading = true);
+    
+    final products = _showInactive 
+        ? await _repository.getAll() 
+        : await _repository.getActive();
+    
+    _totalCount = await _repository.count();
+    _activeCount = await _repository.activeCount();
+    _categories = await _repository.getCategories();
+    
     setState(() {
-      _products = _showInactive ? _repository.getAll() : _repository.getActive();
+      _products = products;
+      _isLoading = false;
       _applyFilters();
     });
   }
@@ -79,8 +94,6 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final categories = _repository.getCategories();
-    
     return Scaffold(
       appBar: AppBar(
         title: const Text('Quản lý Hàng hóa'),
@@ -156,7 +169,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     ),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('Tất cả')),
-                      ...categories.map((c) => 
+                      ..._categories.map((c) => 
                         DropdownMenuItem(value: c, child: Text(c))
                       ),
                     ],
@@ -177,14 +190,21 @@ class _ProductsScreenState extends State<ProductsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
-                _buildStatChip('Tổng: ${_repository.count}', Colors.blue),
+                _buildStatChip('Tổng: $_totalCount', Colors.blue),
                 const SizedBox(width: 8),
-                _buildStatChip('Hoạt động: ${_repository.activeCount}', Colors.green),
+                _buildStatChip('Hoạt động: $_activeCount', Colors.green),
                 const Spacer(),
-                Text(
-                  'Hiển thị: ${_filteredProducts.length}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+                if (_isLoading)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Text(
+                    'Hiển thị: ${_filteredProducts.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
               ],
             ),
           ),
@@ -289,11 +309,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
     if (result != null) {
       if (product == null) {
-        _repository.add(result);
+        await _repository.add(result);
       } else {
-        _repository.update(result);
+        await _repository.update(result);
       }
-      _loadProducts();
+      await _loadProducts();
     }
   }
 
@@ -318,8 +338,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
     );
 
     if (confirm == true) {
-      _repository.delete(product.id!);
-      _loadProducts();
+      await _repository.delete(product.id!);
+      await _loadProducts();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Đã xóa "${product.name}"')),
@@ -641,18 +661,25 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
   void initState() {
     super.initState();
     final p = widget.product;
-    _codeController = TextEditingController(text: p?.code ?? _generateCode());
+    _codeController = TextEditingController(text: p?.code ?? '');
     _nameController = TextEditingController(text: p?.name ?? '');
     _unitPriceController = TextEditingController(text: p?.unitPrice?.toStringAsFixed(0) ?? '');
     _descriptionController = TextEditingController(text: p?.description ?? '');
     _category = p?.category;
     _unit = p?.unit ?? 'kg';
     _isActive = p?.isActive ?? true;
+    _initCode();
   }
 
-  String _generateCode() {
-    final count = ProductRepositoryImpl.instance.count + 1;
-    return 'SP${count.toString().padLeft(3, '0')}';
+  void _initCode() async {
+    if (!isEditing) {
+      final count = await ProductSqliteRepository.instance.count();
+      if (mounted) {
+        setState(() {
+          _codeController.text = 'SP${(count + 1).toString().padLeft(3, '0')}';
+        });
+      }
+    }
   }
 
   @override

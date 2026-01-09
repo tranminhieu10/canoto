@@ -10,6 +10,11 @@ import 'package:canoto/providers/notification_provider.dart';
 import 'package:canoto/providers/settings_provider.dart';
 import 'package:canoto/services/logging/logging_service.dart';
 import 'package:canoto/services/database/database_service.dart';
+import 'package:canoto/data/repositories/customer_sqlite_repository.dart';
+import 'package:canoto/data/repositories/vehicle_sqlite_repository.dart';
+import 'package:canoto/data/repositories/product_sqlite_repository.dart';
+import 'package:canoto/data/repositories/weighing_ticket_sqlite_repository.dart';
+import 'package:canoto/services/audio/audio_service.dart';
 
 void main() async {
   // Run the app in a zone to catch all errors
@@ -26,9 +31,20 @@ void main() async {
       await DatabaseService.instance.initialize();
       loggingService.info('App', 'Database initialized');
 
+      // Insert sample data if tables are empty
+      await CustomerSqliteRepository.instance.insertSampleData();
+      await VehicleSqliteRepository.instance.insertSampleData();
+      await ProductSqliteRepository.instance.insertSampleData();
+      await WeighingTicketSqliteRepository.instance.insertSampleData();
+      loggingService.info('App', 'Sample data checked/inserted');
+
       // Initialize media_kit for video playback
       MediaKit.ensureInitialized();
       loggingService.debug('App', 'MediaKit initialized');
+
+      // Initialize audio service for TTS and sound effects
+      await AudioService.instance.initialize();
+      loggingService.info('App', 'Audio service initialized');
 
       // Initialize settings provider
       final settingsProvider = SettingsProvider();

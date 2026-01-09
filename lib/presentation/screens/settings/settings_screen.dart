@@ -1,14 +1,23 @@
 import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:printing/printing.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import '../../../providers/settings_provider.dart';
 import '../../../providers/notification_provider.dart';
 import '../../../services/sync/sync_service.dart';
 import '../../../services/scale/serial_scale_service_impl.dart';
 import '../../../services/scale/nhb3000_scale_service.dart';
+import '../../../services/audio/audio_service.dart';
 import '../../../core/constants/azure_config.dart';
+import '../../../data/repositories/weighing_ticket_sqlite_repository.dart';
 
 /// Màn hình cài đặt nâng cao với đầy đủ tính năng
 class SettingsScreen extends StatefulWidget {
@@ -1144,47 +1153,128 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _printTestPage() {
-    _showSuccessMessage('Đã gửi lệnh in thử');
+  Future<void> _printTestPage() async {
+    setState(() => _isLoading = true);
+    try {
+      // Tạo trang in thử đơn giản
+      await Printing.layoutPdf(
+        onLayout: (format) async {
+          final pdf = await _generateTestPdf();
+          return pdf;
+        },
+        name: 'Test_Print_CanOTo',
+      );
+      _showSuccessMessage('Đã gửi lệnh in thử');
+    } catch (e) {
+      _showErrorMessage('Lỗi in thử: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
-  void _findPrinters() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Máy in có sẵn'),
-        content: SizedBox(
-          width: 300,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+  Future<Uint8List> _generateTestPdf() async {
+    final pdf = pw.Document();
+    final settings = context.read<SettingsProvider>();
+    
+    pdf.addPage(
+      pw.Page(
+        build: (context) => pw.Center(
+          child: pw.Column(
+            mainAxisAlignment: pw.MainAxisAlignment.center,
             children: [
-              ListTile(
-                leading: const Icon(Icons.print),
-                title: const Text('Microsoft Print to PDF'),
-                onTap: () {
-                  _printerNameController.text = 'Microsoft Print to PDF';
-                  Navigator.pop(context);
-                },
+              pw.Text(
+                settings.companyName.isNotEmpty 
+                    ? settings.companyName 
+                    : 'Hệ thống Cân ô tô',
+                style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold),
               ),
-              ListTile(
-                leading: const Icon(Icons.print),
-                title: const Text('OneNote'),
-                onTap: () {
-                  _printerNameController.text = 'OneNote';
-                  Navigator.pop(context);
-                },
+              pw.SizedBox(height: 20),
+              pw.Text('IN THỬ MÁY IN', style: const pw.TextStyle(fontSize: 18)),
+              pw.SizedBox(height: 10),
+              pw.Text('Ngày: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}'),
+              pw.Text('Giờ: ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}'),
+              pw.SizedBox(height: 30),
+              pw.Container(
+                width: 200,
+                height: 1,
+                color: PdfColors.black,
               ),
+              pw.SizedBox(height: 10),
+              pw.Text('Nếu bạn đọc được dòng này,'),
+              pw.Text('máy in hoạt động bình thường!'),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Đóng'),
-          ),
-        ],
       ),
     );
+    return pdf.save();
+  }
+
+  Future<void> _findPrinters() async {
+    setState(() => _isLoading = true);
+    try {
+      final printers = await Printing.listPrinters();
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      
+      if (printers.isEmpty) {
+        _showInfoMessage('Không tìm thấy máy in nào');
+        return;
+      }
+      
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.print, color: Colors.blue),
+              const SizedBox(width: 8),
+              Text('Máy in có sẵn (${printers.length})'),
+            ],
+          ),
+          content: SizedBox(
+            width: 400,
+            height: 300,
+            child: ListView.builder(
+              itemCount: printers.length,
+              itemBuilder: (context, index) {
+                final printer = printers[index];
+                return ListTile(
+                  leading: Icon(
+                    printer.isDefault ? Icons.star : Icons.print,
+                    color: printer.isDefault ? Colors.amber : Colors.grey,
+                  ),
+                  title: Text(printer.name),
+                  subtitle: Text(
+                    printer.isDefault ? 'Mặc định' : (printer.url),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: printer.isAvailable
+                      ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                      : const Icon(Icons.error, color: Colors.red, size: 18),
+                  onTap: () {
+                    _printerNameController.text = printer.name;
+                    Navigator.pop(context);
+                    _showSuccessMessage('Đã chọn: ${printer.name}');
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        _showErrorMessage('Lỗi tìm máy in: $e');
+      }
+    }
   }
 
   // ==================== SYNC SETTINGS ====================
@@ -1240,6 +1330,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed: _downloadFromCloud,
                     ),
                   ],
+                ),
+                const SizedBox(height: 16),
+                // Sync statistics
+                FutureBuilder<Map<String, int>>(
+                  future: _getSyncStats(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return const SizedBox.shrink();
+                    }
+                    final stats = snapshot.data!;
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('📊 Thống kê đồng bộ (90 ngày):', 
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              _buildStatItem('Tổng phiếu', stats['total'] ?? 0, Colors.blue),
+                              const SizedBox(width: 24),
+                              _buildStatItem('Đã sync', stats['synced'] ?? 0, Colors.green),
+                              const SizedBox(width: 24),
+                              _buildStatItem('Chờ sync', stats['unsynced'] ?? 0, Colors.orange),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+
+            _buildSectionCard(
+              title: 'Dữ liệu Test (Developer)',
+              icon: Icons.science,
+              children: [
+                ListTile(
+                  title: const Text('Tạo 1000 phiếu cân giả'),
+                  subtitle: const Text('10% cân lần 1, 10% cân lần 2, 80% hoàn thành'),
+                  trailing: ElevatedButton.icon(
+                    icon: const Icon(Icons.add_chart),
+                    label: const Text('Tạo'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                    ),
+                    onPressed: _generateTestData,
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Xóa dữ liệu test'),
+                  subtitle: const Text('Xóa các phiếu cân được tạo bởi Admin'),
+                  trailing: ElevatedButton.icon(
+                    icon: const Icon(Icons.delete_sweep),
+                    label: const Text('Xóa'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                    ),
+                    onPressed: _deleteTestData,
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Xóa toàn bộ dữ liệu'),
+                  subtitle: const Text('⚠️ Cẩn thận! Xóa tất cả phiếu cân trong database'),
+                  trailing: ElevatedButton.icon(
+                    icon: const Icon(Icons.delete_forever),
+                    label: const Text('Xóa tất cả'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red.shade900,
+                    ),
+                    onPressed: _clearAllData,
+                  ),
                 ),
               ],
             ),
@@ -1307,9 +1476,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isLoading = true);
     try {
       final syncService = SyncService.instance;
-      await syncService.forceSync();
+      final repo = WeighingTicketSqliteRepository.instance;
+      
+      // Get count before sync for info
+      final unsyncedCount = await repo.countUnsyncedCompleted(days: 90);
+      debugPrint('SettingsScreen: Found $unsyncedCount unsynced completed tickets in last 90 days');
+      
+      if (unsyncedCount == 0) {
+        if (!mounted) return;
+        _showSuccessMessage('Không có phiếu cần đồng bộ!');
+        setState(() => _isLoading = false);
+        return;
+      }
+      
+      _showInfoMessage('Đang đồng bộ $unsyncedCount phiếu...');
+      
+      final result = await syncService.forceSync(
+        getUnsyncedTickets: () => repo.getUnsyncedCompleted(days: 90),
+        markAsSynced: (ids, azureIds) => repo.markAsSynced(ids, azureIds),
+      );
+      
       if (!mounted) return;
-      _showSuccessMessage('Đồng bộ thành công!');
+      
+      if (result.success) {
+        _showSuccessMessage('Đồng bộ thành công: ${result.syncedCount} phiếu');
+      } else {
+        _showErrorMessage('Lỗi đồng bộ: ${result.message}');
+      }
     } catch (e) {
       if (!mounted) return;
       _showErrorMessage('Lỗi đồng bộ: $e');
@@ -1320,42 +1513,399 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _downloadFromCloud() {
-    _showInfoMessage('Đang tải dữ liệu từ cloud...');
+  Future<Map<String, int>> _getSyncStats() async {
+    final repo = WeighingTicketSqliteRepository.instance;
+    final total = await repo.getTicketCount();
+    final synced = await repo.countSynced();
+    final unsynced = await repo.countUnsyncedCompleted(days: 90);
+    return {
+      'total': total,
+      'synced': synced,
+      'unsynced': unsynced,
+    };
   }
 
-  void _backupNow() {
-    _showInfoMessage('Đang sao lưu dữ liệu...');
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        _showSuccessMessage('Đã sao lưu dữ liệu thành công!');
-      }
-    });
+  Widget _buildStatItem(String label, int value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value.toString(),
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+      ],
+    );
   }
 
-  void _restoreBackup() {
-    showDialog(
+  Future<void> _downloadFromCloud() async {
+    // Hiện dialog xác nhận
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Khôi phục dữ liệu'),
+        title: const Row(
+          children: [
+            Icon(Icons.cloud_download, color: Colors.purple),
+            SizedBox(width: 8),
+            Text('Tải dữ liệu từ Cloud'),
+          ],
+        ),
         content: const Text(
-          'Chọn file backup để khôi phục. Lưu ý: Dữ liệu hiện tại sẽ bị ghi đè.',
+          'Tính năng này sẽ tải dữ liệu từ Azure Cloud về thiết bị.\n\n'
+          '⚠️ LƯU Ý: Dữ liệu cục bộ chưa đồng bộ có thể bị ghi đè!\n\n'
+          'Bạn có muốn tiếp tục?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(context, false),
             child: const Text('Hủy'),
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _showInfoMessage('Đang khôi phục dữ liệu...');
-            },
-            child: const Text('Chọn file'),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.cloud_download),
+            label: const Text('Tải về'),
           ),
         ],
       ),
     );
+    
+    if (confirm != true) return;
+    
+    setState(() => _isLoading = true);
+    _showInfoMessage('Đang tải dữ liệu từ cloud...');
+    
+    try {
+      // Gọi API để lấy dữ liệu từ Azure
+      final syncService = SyncService.instance;
+      final result = await syncService.downloadFromCloud();
+      
+      if (!mounted) return;
+      
+      if (result['success'] == true) {
+        final count = result['count'] ?? 0;
+        _showSuccessMessage('Đã tải $count phiếu cân từ cloud!');
+      } else {
+        _showErrorMessage(result['error'] ?? 'Không thể tải dữ liệu từ cloud');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showErrorMessage('Lỗi tải dữ liệu: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _generateTestData() async {
+    // Hiện dialog xác nhận
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.science, color: Colors.teal),
+            SizedBox(width: 8),
+            Text('Tạo dữ liệu Test'),
+          ],
+        ),
+        content: const Text(
+          'Tính năng này sẽ tạo 1000 phiếu cân giả lập để test:\n\n'
+          '• 100 phiếu (10%): Chỉ có cân lần 1\n'
+          '• 100 phiếu (10%): Chỉ có cân lần 2\n'
+          '• 800 phiếu (80%): Cân hoàn thành\n\n'
+          'Dữ liệu sẽ phân bố trong 90 ngày gần đây.\n\n'
+          'Bạn có muốn tiếp tục?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.add_chart),
+            label: const Text('Tạo dữ liệu'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirm != true) return;
+    
+    setState(() => _isLoading = true);
+    _showInfoMessage('Đang tạo 1000 phiếu cân test...');
+    
+    try {
+      final repo = WeighingTicketSqliteRepository.instance;
+      debugPrint('Starting insertTestData...');
+      final insertedCount = await repo.insertTestData(
+        totalCount: 1000,
+        firstWeighOnlyPercent: 0.10,
+        secondWeighOnlyPercent: 0.10,
+      );
+      debugPrint('insertTestData completed: $insertedCount');
+      
+      if (!mounted) return;
+      
+      if (insertedCount > 0) {
+        _showSuccessMessage('Đã tạo $insertedCount phiếu cân test thành công!');
+      } else {
+        _showErrorMessage('Không thể tạo dữ liệu test (insertedCount=0)');
+      }
+    } catch (e, stackTrace) {
+      debugPrint('Error in _generateTestData: $e');
+      debugPrint('StackTrace: $stackTrace');
+      if (!mounted) return;
+      _showErrorMessage('Lỗi tạo dữ liệu: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _deleteTestData() async {
+    // Hiện dialog xác nhận
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.delete_sweep, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Xóa dữ liệu Test'),
+          ],
+        ),
+        content: const Text(
+          'Tính năng này sẽ xóa các phiếu cân test được tạo bởi Admin.\n\n'
+          'Dữ liệu thực tế sẽ không bị ảnh hưởng.\n\n'
+          'Bạn có muốn tiếp tục?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.delete_sweep),
+            label: const Text('Xóa'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirm != true) return;
+    
+    setState(() => _isLoading = true);
+    _showInfoMessage('Đang xóa dữ liệu test...');
+    
+    try {
+      final repo = WeighingTicketSqliteRepository.instance;
+      final deletedCount = await repo.deleteTestData();
+      
+      if (!mounted) return;
+      _showSuccessMessage('Đã xóa $deletedCount phiếu cân test!');
+    } catch (e) {
+      if (!mounted) return;
+      _showErrorMessage('Lỗi xóa dữ liệu: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _clearAllData() async {
+    // Hiện dialog xác nhận 2 lần
+    final confirm1 = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.red.shade900),
+            const SizedBox(width: 8),
+            const Text('⚠️ CẢNH BÁO'),
+          ],
+        ),
+        content: const Text(
+          'BẠN SẮP XÓA TOÀN BỘ DỮ LIỆU PHIẾU CÂN!\n\n'
+          '⚠️ Hành động này KHÔNG THỂ hoàn tác!\n'
+          '⚠️ Tất cả phiếu cân sẽ bị xóa vĩnh viễn!\n\n'
+          'Bạn có CHẮC CHẮN muốn tiếp tục?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.delete_forever),
+            label: const Text('Tiếp tục'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirm1 != true) return;
+    
+    // Xác nhận lần 2
+    final confirm2 = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.delete_forever, color: Colors.red.shade900),
+            const SizedBox(width: 8),
+            const Text('XÁC NHẬN LẦN CUỐI'),
+          ],
+        ),
+        content: const Text(
+          'Nhấn "XÓA TẤT CẢ" để xác nhận xóa toàn bộ dữ liệu.\n\n'
+          'Đây là cơ hội cuối cùng để hủy bỏ.',
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('HỦY BỎ'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.delete_forever),
+            label: const Text('XÓA TẤT CẢ'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirm2 != true) return;
+    
+    setState(() => _isLoading = true);
+    _showInfoMessage('Đang xóa toàn bộ dữ liệu...');
+    
+    try {
+      final repo = WeighingTicketSqliteRepository.instance;
+      final deletedCount = await repo.clearAll();
+      
+      if (!mounted) return;
+      _showSuccessMessage('Đã xóa $deletedCount phiếu cân!');
+    } catch (e) {
+      if (!mounted) return;
+      _showErrorMessage('Lỗi xóa dữ liệu: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _backupNow() async {
+    setState(() => _isLoading = true);
+    _showInfoMessage('Đang sao lưu dữ liệu...');
+    
+    try {
+      // Lấy đường dẫn database
+      final docsDir = await getApplicationDocumentsDirectory();
+      final dbPath = '${docsDir.path}${Platform.pathSeparator}CanOTo${Platform.pathSeparator}canoto.db';
+      final dbFile = File(dbPath);
+      
+      if (!await dbFile.exists()) {
+        _showErrorMessage('Không tìm thấy file database');
+        return;
+      }
+      
+      // Chọn nơi lưu backup
+      final result = await FilePicker.platform.saveFile(
+        dialogTitle: 'Chọn nơi lưu file backup',
+        fileName: 'canoto_backup_${DateTime.now().millisecondsSinceEpoch}.db',
+        type: FileType.any,
+      );
+      
+      if (result != null) {
+        // Copy database sang vị trí mới
+        await dbFile.copy(result);
+        _showSuccessMessage('Đã sao lưu thành công: $result');
+      }
+    } catch (e) {
+      _showErrorMessage('Lỗi sao lưu: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _restoreBackup() async {
+    // Hiện dialog xác nhận
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Khôi phục dữ liệu'),
+          ],
+        ),
+        content: const Text(
+          'Chọn file backup để khôi phục.\n\n'
+          '⚠️ LƯU Ý: Dữ liệu hiện tại sẽ bị ghi đè hoàn toàn!\n'
+          'Hãy sao lưu dữ liệu hiện tại trước khi tiếp tục.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Tiếp tục'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirm != true) return;
+    
+    try {
+      // Chọn file backup
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Chọn file backup',
+        type: FileType.any,
+        allowMultiple: false,
+      );
+      
+      if (result != null && result.files.isNotEmpty) {
+        final backupPath = result.files.first.path;
+        if (backupPath == null) return;
+        
+        setState(() => _isLoading = true);
+        _showInfoMessage('Đang khôi phục dữ liệu...');
+        
+        // Lấy đường dẫn database hiện tại
+        final docsDir = await getApplicationDocumentsDirectory();
+        final dbPath = '${docsDir.path}${Platform.pathSeparator}CanOTo${Platform.pathSeparator}canoto.db';
+        
+        // Copy file backup vào vị trí database
+        final backupFile = File(backupPath);
+        await backupFile.copy(dbPath);
+        
+        _showSuccessMessage('Đã khôi phục dữ liệu thành công! Vui lòng khởi động lại ứng dụng.');
+      }
+    } catch (e) {
+      _showErrorMessage('Lỗi khôi phục: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   // ==================== AZURE SETTINGS ====================
@@ -1588,32 +2138,127 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
 
             _buildSectionCard(
+              title: 'Giọng nói (Text-to-Speech)',
+              icon: Icons.record_voice_over,
+              children: [
+                SwitchListTile(
+                  title: const Text('Bật giọng nói'),
+                  subtitle: const Text('Đọc thông báo bằng giọng nói'),
+                  secondary: const Icon(Icons.record_voice_over),
+                  value: settings.voiceEnabled,
+                  onChanged: (value) => settings.setVoiceEnabled(value),
+                ),
+                ListTile(
+                  title: const Text('Âm lượng'),
+                  subtitle: Slider(
+                    value: settings.voiceVolume,
+                    min: 0.0,
+                    max: 1.0,
+                    divisions: 10,
+                    label: '${(settings.voiceVolume * 100).toInt()}%',
+                    onChanged: settings.voiceEnabled 
+                        ? (value) => settings.setVoiceVolume(value)
+                        : null,
+                  ),
+                  leading: const Icon(Icons.volume_up),
+                  trailing: Text('${(settings.voiceVolume * 100).toInt()}%'),
+                ),
+                ListTile(
+                  title: const Text('Tốc độ nói'),
+                  subtitle: Slider(
+                    value: settings.voiceSpeechRate,
+                    min: 0.1,
+                    max: 1.0,
+                    divisions: 9,
+                    label: _getSpeechRateLabel(settings.voiceSpeechRate),
+                    onChanged: settings.voiceEnabled 
+                        ? (value) => settings.setVoiceSpeechRate(value)
+                        : null,
+                  ),
+                  leading: const Icon(Icons.speed),
+                  trailing: Text(_getSpeechRateLabel(settings.voiceSpeechRate)),
+                ),
+                ListTile(
+                  title: const Text('Cao độ'),
+                  subtitle: Slider(
+                    value: settings.voicePitch,
+                    min: 0.5,
+                    max: 2.0,
+                    divisions: 15,
+                    label: settings.voicePitch.toStringAsFixed(1),
+                    onChanged: settings.voiceEnabled 
+                        ? (value) => settings.setVoicePitch(value)
+                        : null,
+                  ),
+                  leading: const Icon(Icons.tune),
+                  trailing: Text(settings.voicePitch.toStringAsFixed(1)),
+                ),
+                const Divider(),
+                ListTile(
+                  title: const Text('Thử giọng nói'),
+                  subtitle: const Text('Nhấn để nghe thử'),
+                  leading: const Icon(Icons.play_circle),
+                  trailing: ElevatedButton.icon(
+                    onPressed: settings.voiceEnabled ? _testVoice : null,
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('Thử'),
+                  ),
+                ),
+              ],
+            ),
+
+            _buildSectionCard(
+              title: 'Thông báo giọng nói',
+              icon: Icons.campaign,
+              children: [
+                SwitchListTile(
+                  title: const Text('Đọc trọng lượng'),
+                  subtitle: const Text('Đọc kết quả cân bằng giọng nói'),
+                  secondary: const Icon(Icons.scale),
+                  value: settings.announceWeight,
+                  onChanged: settings.voiceEnabled 
+                      ? (value) => settings.setAnnounceWeight(value)
+                      : null,
+                ),
+                SwitchListTile(
+                  title: const Text('Thông báo xe'),
+                  subtitle: const Text('Đọc biển số xe ra/vào trạm'),
+                  secondary: const Icon(Icons.directions_car),
+                  value: settings.announceVehicle,
+                  onChanged: settings.voiceEnabled 
+                      ? (value) => settings.setAnnounceVehicle(value)
+                      : null,
+                ),
+              ],
+            ),
+
+            _buildSectionCard(
               title: 'Loại thông báo',
               icon: Icons.tune,
               children: [
                 SwitchListTile(
                   title: const Text('Phiếu cân mới'),
                   subtitle: const Text('Thông báo khi có phiếu cân mới'),
-                  value: true,
-                  onChanged: (value) {},
+                  value: settings.notifyWeighing,
+                  onChanged: (value) => settings.setNotifyWeighing(value),
                 ),
                 SwitchListTile(
                   title: const Text('Đồng bộ'),
                   subtitle: const Text('Thông báo khi đồng bộ dữ liệu'),
-                  value: true,
-                  onChanged: (value) {},
+                  value: settings.notifySync,
+                  onChanged: (value) => settings.setNotifySync(value),
                 ),
                 SwitchListTile(
                   title: const Text('Lỗi hệ thống'),
                   subtitle: const Text('Thông báo khi có lỗi'),
-                  value: true,
-                  onChanged: (value) {},
+                  value: settings.notifyError,
+                  onChanged: (value) => settings.setNotifyError(value),
                 ),
                 SwitchListTile(
                   title: const Text('Bảo trì'),
                   subtitle: const Text('Thông báo về bảo trì hệ thống'),
-                  value: false,
-                  onChanged: (value) {},
+                  value: settings.notifyMaintenance,
+                  onChanged: (value) => settings.setNotifyMaintenance(value),
                 ),
               ],
             ),
@@ -1621,6 +2266,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       },
     );
+  }
+
+  String _getSpeechRateLabel(double rate) {
+    if (rate <= 0.3) return 'Chậm';
+    if (rate <= 0.5) return 'Bình thường';
+    if (rate <= 0.7) return 'Nhanh';
+    return 'Rất nhanh';
+  }
+
+  Future<void> _testVoice() async {
+    try {
+      final audioService = AudioService.instance;
+      if (!audioService.isInitialized) {
+        await audioService.initialize();
+      }
+      await audioService.speak('Xin chào, đây là hệ thống cân ô tô');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Đang phát: "Xin chào, đây là hệ thống cân ô tô"'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Lỗi phát giọng nói: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   // ==================== COMPANY SETTINGS ====================
@@ -1787,34 +2466,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _exportSettings() {
-    final settings = context.read<SettingsProvider>().exportSettings();
-    _showSuccessMessage('Đã xuất cài đặt (${settings.length} mục)');
+  Future<void> _exportSettings() async {
+    setState(() => _isLoading = true);
+    try {
+      final settings = context.read<SettingsProvider>().exportSettings();
+      final jsonString = const JsonEncoder.withIndent('  ').convert(settings);
+      
+      // Chọn nơi lưu file
+      final result = await FilePicker.platform.saveFile(
+        dialogTitle: 'Xuất cài đặt',
+        fileName: 'canoto_settings_${DateTime.now().millisecondsSinceEpoch}.json',
+        type: FileType.any,
+      );
+      
+      if (result != null) {
+        final file = File(result);
+        await file.writeAsString(jsonString);
+        _showSuccessMessage('Đã xuất cài đặt: $result');
+      }
+    } catch (e) {
+      _showErrorMessage('Lỗi xuất cài đặt: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
-  void _importSettings() {
-    showDialog(
+  Future<void> _importSettings() async {
+    // Hiện dialog xác nhận
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Nhập cài đặt'),
         content: const Text(
-          'Chọn file cài đặt để nhập. Cài đặt hiện tại sẽ bị ghi đè.',
+          'Chọn file cài đặt JSON để nhập.\n\n'
+          'Lưu ý: Cài đặt hiện tại sẽ bị ghi đè.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(context, false),
             child: const Text('Hủy'),
           ),
           ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _showInfoMessage('Đang nhập cài đặt...');
-            },
+            onPressed: () => Navigator.pop(context, true),
             child: const Text('Chọn file'),
           ),
         ],
       ),
     );
+    
+    if (confirm != true) return;
+    
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Chọn file cài đặt',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        allowMultiple: false,
+      );
+      
+      if (result != null && result.files.isNotEmpty) {
+        final filePath = result.files.first.path;
+        if (filePath == null) return;
+        
+        setState(() => _isLoading = true);
+        _showInfoMessage('Đang nhập cài đặt...');
+        
+        final file = File(filePath);
+        final jsonString = await file.readAsString();
+        final settings = json.decode(jsonString) as Map<String, dynamic>;
+        
+        await context.read<SettingsProvider>().importSettings(settings);
+        _loadSettings(); // Reload UI với settings mới
+        
+        _showSuccessMessage('Đã nhập cài đặt thành công!');
+      }
+    } catch (e) {
+      _showErrorMessage('Lỗi nhập cài đặt: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   // ==================== HELPER METHODS ====================

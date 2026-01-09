@@ -6,6 +6,7 @@
 
 #include "generated_plugin_registrant.h"
 
+#include <audioplayers_linux/audioplayers_linux_plugin.h>
 #include <flutter_libserialport/flutter_libserialport_plugin.h>
 #include <media_kit_video/media_kit_video_plugin.h>
 #include <printing/printing_plugin.h>
@@ -13,6 +14,9 @@
 #include <volume_controller/volume_controller_plugin.h>
 
 void fl_register_plugins(FlPluginRegistry* registry) {
+  g_autoptr(FlPluginRegistrar) audioplayers_linux_registrar =
+      fl_plugin_registry_get_registrar_for_plugin(registry, "AudioplayersLinuxPlugin");
+  audioplayers_linux_plugin_register_with_registrar(audioplayers_linux_registrar);
   g_autoptr(FlPluginRegistrar) flutter_libserialport_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "FlutterLibserialportPlugin");
   flutter_libserialport_plugin_register_with_registrar(flutter_libserialport_registrar);

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:canoto/data/models/vehicle.dart';
-import 'package:canoto/data/repositories/vehicle_repository_impl.dart';
-import 'package:canoto/data/repositories/customer_repository_impl.dart';
+import 'package:canoto/data/repositories/vehicle_sqlite_repository.dart';
+import 'package:canoto/data/repositories/customer_sqlite_repository.dart';
 
 /// Màn hình quản lý xe
 class VehiclesScreen extends StatefulWidget {
@@ -12,7 +12,7 @@ class VehiclesScreen extends StatefulWidget {
 }
 
 class _VehiclesScreenState extends State<VehiclesScreen> {
-  final _repository = VehicleRepositoryImpl.instance;
+  final _repository = VehicleSqliteRepository.instance;
   final _searchController = TextEditingController();
   
   List<Vehicle> _vehicles = [];
@@ -20,6 +20,9 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
   bool _showInactive = false;
   String _sortBy = 'licensePlate';
   bool _sortAsc = true;
+  bool _isLoading = true;
+  int _totalCount = 0;
+  int _activeCount = 0;
 
   @override
   void initState() {
@@ -33,9 +36,19 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
     super.dispose();
   }
 
-  void _loadVehicles() {
+  Future<void> _loadVehicles() async {
+    setState(() => _isLoading = true);
+    
+    final vehicles = _showInactive 
+        ? await _repository.getAll() 
+        : await _repository.getActive();
+    
+    _totalCount = await _repository.count();
+    _activeCount = await _repository.activeCount();
+    
     setState(() {
-      _vehicles = _showInactive ? _repository.getAll() : _repository.getActive();
+      _vehicles = vehicles;
+      _isLoading = false;
       _applyFilters();
     });
   }
@@ -137,14 +150,21 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
-                _buildStatChip('Tổng: ${_repository.count}', Colors.blue),
+                _buildStatChip('Tổng: $_totalCount', Colors.blue),
                 const SizedBox(width: 8),
-                _buildStatChip('Hoạt động: ${_repository.activeCount}', Colors.green),
+                _buildStatChip('Hoạt động: $_activeCount', Colors.green),
                 const Spacer(),
-                Text(
-                  'Hiển thị: ${_filteredVehicles.length}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+                if (_isLoading)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Text(
+                    'Hiển thị: ${_filteredVehicles.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
               ],
             ),
           ),
@@ -232,11 +252,11 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
 
     if (result != null) {
       if (vehicle == null) {
-        _repository.add(result);
+        await _repository.add(result);
       } else {
-        _repository.update(result);
+        await _repository.update(result);
       }
-      _loadVehicles();
+      await _loadVehicles();
     }
   }
 
@@ -261,8 +281,8 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
     );
 
     if (confirm == true) {
-      _repository.delete(vehicle.id!);
-      _loadVehicles();
+      await _repository.delete(vehicle.id!);
+      await _loadVehicles();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Đã xóa xe "${vehicle.licensePlate}"')),
@@ -503,6 +523,7 @@ class _VehicleFormDialogState extends State<_VehicleFormDialog> {
   String? _color;
   int? _customerId;
   late bool _isActive;
+  List<dynamic> _customers = [];
 
   final _vehicleTypes = ['Xe tải', 'Xe tải nhỏ', 'Xe ben', 'Xe container', 'Xe bồn', 'Khác'];
   final _brands = ['Hyundai', 'Isuzu', 'Hino', 'Howo', 'Mercedes', 'Kia', 'Khác'];
@@ -524,6 +545,14 @@ class _VehicleFormDialogState extends State<_VehicleFormDialog> {
     _color = v?.color;
     _customerId = v?.customerId;
     _isActive = v?.isActive ?? true;
+    _loadCustomers();
+  }
+
+  Future<void> _loadCustomers() async {
+    final customers = await CustomerSqliteRepository.instance.getActive();
+    if (mounted) {
+      setState(() => _customers = customers);
+    }
   }
 
   @override
@@ -538,7 +567,7 @@ class _VehicleFormDialogState extends State<_VehicleFormDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final customers = CustomerRepositoryImpl.instance.getActive();
+    final customers = _customers;
     
     return AlertDialog(
       title: Text(isEditing ? 'Sửa thông tin xe' : 'Thêm xe mới'),
@@ -697,9 +726,16 @@ class _VehicleFormDialogState extends State<_VehicleFormDialog> {
   void _save() {
     if (!_formKey.currentState!.validate()) return;
 
-    final customer = _customerId != null 
-        ? CustomerRepositoryImpl.instance.getById(_customerId!) 
-        : null;
+    // Find customer name from loaded customers
+    String? customerName;
+    if (_customerId != null) {
+      for (final c in _customers) {
+        if (c.id == _customerId) {
+          customerName = c.name;
+          break;
+        }
+      }
+    }
 
     final vehicle = Vehicle(
       id: widget.vehicle?.id,
@@ -709,7 +745,7 @@ class _VehicleFormDialogState extends State<_VehicleFormDialog> {
       color: _color,
       tareWeight: double.tryParse(_tareWeightController.text.trim()),
       customerId: _customerId,
-      customerName: customer?.name,
+      customerName: customerName,
       driverName: _driverNameController.text.trim().isEmpty ? null : _driverNameController.text.trim(),
       driverPhone: _driverPhoneController.text.trim().isEmpty ? null : _driverPhoneController.text.trim(),
       note: _noteController.text.trim().isEmpty ? null : _noteController.text.trim(),

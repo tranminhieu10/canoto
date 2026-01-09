@@ -10,8 +10,8 @@ class ApiService {
   static ApiService get instance => _instance ??= ApiService._();
   ApiService._();
 
-  // Base URL for Azure API - có thể cấu hình từ settings
-  String _baseUrl = 'https://canoto-api.azurewebsites.net/api';
+  // Base URL for Azure API - Azure Functions URL
+  String _baseUrl = 'https://func-tramcan-hieu.azurewebsites.net/api';
   
   // API endpoints - khớp với Azure Functions
   static const String weighingTicketsEndpoint = '/weighing-tickets';
@@ -85,14 +85,16 @@ class ApiService {
       final request = await _client!.postUrl(uri);
       
       // Set headers
-      request.headers.set('Content-Type', 'application/json');
+      request.headers.set('Content-Type', 'application/json; charset=utf-8');
       if (_apiKey != null && _apiKey!.isNotEmpty) {
         request.headers.set('x-functions-key', _apiKey!);
       }
       
-      // Write body
+      // Write body - encode as UTF-8 bytes
       final jsonData = jsonEncode(data);
-      request.write(jsonData);
+      final jsonBytes = utf8.encode(jsonData);
+      request.headers.contentLength = jsonBytes.length;
+      request.add(jsonBytes);
       
       // Get response
       final response = await request.close();
@@ -203,21 +205,55 @@ class ApiService {
   }
 
   /// Upload multiple weighing tickets to Azure (batch)
+  /// First try batch upload, fallback to individual if batch fails
   Future<ApiResponse> uploadWeighingTicketsData(List<Map<String, dynamic>> tickets) async {
-    // Azure Functions expects individual tickets, so we send them one by one
-    // and collect results
+    if (tickets.isEmpty) {
+      return ApiResponse(
+        success: true,
+        statusCode: 200,
+        message: 'No tickets to sync',
+        data: {'syncedIds': []},
+      );
+    }
+    
+    // Try batch upload first (faster)
+    debugPrint('ApiService: Attempting batch upload of ${tickets.length} tickets...');
+    final batchResult = await post('$weighingTicketsEndpoint/batch', tickets);
+    
+    if (batchResult.success) {
+      debugPrint('ApiService: Batch upload successful');
+      return ApiResponse(
+        success: true,
+        statusCode: 200,
+        message: 'Batch synced ${tickets.length} tickets',
+        data: {'syncedIds': tickets.map((t) => t['ticketNumber'] ?? t['id']).toList()},
+      );
+    }
+    
+    // Fallback to individual upload if batch fails
+    debugPrint('ApiService: Batch failed, falling back to individual upload...');
     List<String> successIds = [];
     List<String> failedIds = [];
     
-    for (final ticket in tickets) {
-      final result = await createWeighingTicket(ticket);
+    for (int i = 0; i < tickets.length; i++) {
+      final ticket = tickets[i];
       final ticketId = ticket['ticketNumber'] ?? ticket['id'] ?? 'unknown';
+      
+      // Log progress every 10 tickets
+      if (i > 0 && i % 10 == 0) {
+        debugPrint('ApiService: Upload progress: $i/${tickets.length}');
+      }
+      
+      final result = await createWeighingTicket(ticket);
       if (result.success) {
         successIds.add(ticketId.toString());
       } else {
         failedIds.add(ticketId.toString());
+        debugPrint('ApiService: Failed to upload ticket $ticketId: ${result.error}');
       }
     }
+    
+    debugPrint('ApiService: Upload complete - ${successIds.length} success, ${failedIds.length} failed');
     
     if (failedIds.isEmpty) {
       return ApiResponse(
@@ -234,6 +270,7 @@ class ApiService {
         error: 'Failed tickets: ${failedIds.join(", ")}',
       );
     } else {
+      // Partial success - still return success but with info about failures
       return ApiResponse(
         success: true,
         statusCode: 200,

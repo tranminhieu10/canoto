@@ -15,7 +15,7 @@ class DatabaseService {
   final LoggingService _logger = LoggingService.instance;
 
   static const String _databaseName = 'canoto.db';
-  static const int _databaseVersion = 1;
+  static const int _databaseVersion = 2; // Updated: added new columns to vehicles table
 
   bool get isInitialized => _database != null;
 
@@ -147,10 +147,17 @@ class DatabaseService {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         license_plate TEXT NOT NULL UNIQUE,
         vehicle_type TEXT,
+        brand TEXT,
+        model TEXT,
+        color TEXT,
         owner_name TEXT,
         owner_phone TEXT,
         tare_weight REAL,
-        notes TEXT,
+        customer_id INTEGER,
+        customer_name TEXT,
+        driver_name TEXT,
+        driver_phone TEXT,
+        note TEXT,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -189,11 +196,68 @@ class DatabaseService {
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     _logger.info('Database', 'Upgrading database from v$oldVersion to v$newVersion...');
     
-    // Thêm các migration scripts ở đây khi cần upgrade
-    // Example:
-    // if (oldVersion < 2) {
-    //   await db.execute('ALTER TABLE weighing_tickets ADD COLUMN new_column TEXT');
-    // }
+    // Migration from v1 to v2: Update vehicles table with new columns
+    if (oldVersion < 2) {
+      _logger.info('Database', 'Migrating vehicles table to v2...');
+      
+      // Backup old data
+      final oldVehicles = await db.query('vehicles');
+      
+      // Drop old table
+      await db.execute('DROP TABLE IF EXISTS vehicles');
+      
+      // Create new table with updated schema
+      await db.execute('''
+        CREATE TABLE vehicles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          license_plate TEXT NOT NULL UNIQUE,
+          vehicle_type TEXT,
+          brand TEXT,
+          model TEXT,
+          color TEXT,
+          owner_name TEXT,
+          owner_phone TEXT,
+          tare_weight REAL,
+          customer_id INTEGER,
+          customer_name TEXT,
+          driver_name TEXT,
+          driver_phone TEXT,
+          note TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      
+      // Restore old data (if any) - map old columns to new
+      for (final vehicle in oldVehicles) {
+        try {
+          await db.insert('vehicles', {
+            'id': vehicle['id'],
+            'license_plate': vehicle['license_plate'],
+            'vehicle_type': vehicle['vehicle_type'],
+            'brand': null,
+            'model': null,
+            'color': null,
+            'owner_name': vehicle['owner_name'],
+            'owner_phone': vehicle['owner_phone'],
+            'tare_weight': vehicle['tare_weight'],
+            'customer_id': null,
+            'customer_name': null,
+            'driver_name': null,
+            'driver_phone': null,
+            'note': null,
+            'is_active': vehicle['is_active'] ?? 1,
+            'created_at': vehicle['created_at'] ?? DateTime.now().toIso8601String(),
+            'updated_at': vehicle['updated_at'] ?? DateTime.now().toIso8601String(),
+          });
+        } catch (e) {
+          _logger.error('Database', 'Error migrating vehicle: ${vehicle['license_plate']}', error: e);
+        }
+      }
+      
+      _logger.info('Database', 'Vehicles table migration completed');
+    }
   }
 
   /// Lấy database instance

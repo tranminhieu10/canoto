@@ -3,8 +3,10 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  audioplayers_windows
   connectivity_plus
   flutter_libserialport
+  flutter_tts
   media_kit_libs_windows_video
   media_kit_video
   printing

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'scale_service.dart';
 import 'nhb3000_scale_service.dart';
 import 'serial_scale_service_impl.dart';

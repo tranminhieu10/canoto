@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:canoto/data/models/customer.dart';
-import 'package:canoto/data/repositories/customer_repository_impl.dart';
+import 'package:canoto/data/repositories/customer_sqlite_repository.dart';
 
 /// Màn hình quản lý khách hàng
 class CustomersScreen extends StatefulWidget {
@@ -11,7 +11,7 @@ class CustomersScreen extends StatefulWidget {
 }
 
 class _CustomersScreenState extends State<CustomersScreen> {
-  final _repository = CustomerRepositoryImpl.instance;
+  final _repository = CustomerSqliteRepository.instance;
   final _searchController = TextEditingController();
   
   List<Customer> _customers = [];
@@ -19,6 +19,9 @@ class _CustomersScreenState extends State<CustomersScreen> {
   bool _showInactive = false;
   String _sortBy = 'name';
   bool _sortAsc = true;
+  bool _isLoading = true;
+  int _totalCount = 0;
+  int _activeCount = 0;
 
   @override
   void initState() {
@@ -32,9 +35,19 @@ class _CustomersScreenState extends State<CustomersScreen> {
     super.dispose();
   }
 
-  void _loadCustomers() {
+  Future<void> _loadCustomers() async {
+    setState(() => _isLoading = true);
+    
+    final customers = _showInactive 
+        ? await _repository.getAll() 
+        : await _repository.getActive();
+    
+    _totalCount = await _repository.count();
+    _activeCount = await _repository.activeCount();
+    
     setState(() {
-      _customers = _showInactive ? _repository.getAll() : _repository.getActive();
+      _customers = customers;
+      _isLoading = false;
       _applyFilters();
     });
   }
@@ -140,19 +153,26 @@ class _CustomersScreenState extends State<CustomersScreen> {
             child: Row(
               children: [
                 _buildStatChip(
-                  'Tổng: ${_repository.count}',
+                  'Tổng: $_totalCount',
                   Colors.blue,
                 ),
                 const SizedBox(width: 8),
                 _buildStatChip(
-                  'Hoạt động: ${_repository.activeCount}',
+                  'Hoạt động: $_activeCount',
                   Colors.green,
                 ),
                 const Spacer(),
-                Text(
-                  'Hiển thị: ${_filteredCustomers.length}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+                if (_isLoading)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Text(
+                    'Hiển thị: ${_filteredCustomers.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
               ],
             ),
           ),
@@ -244,11 +264,11 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
     if (result != null) {
       if (customer == null) {
-        _repository.add(result);
+        await _repository.add(result);
       } else {
-        _repository.update(result);
+        await _repository.update(result);
       }
-      _loadCustomers();
+      await _loadCustomers();
     }
   }
 
@@ -273,8 +293,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
     );
 
     if (confirm == true) {
-      _repository.delete(customer.id!);
-      _loadCustomers();
+      await _repository.delete(customer.id!);
+      await _loadCustomers();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Đã xóa "${customer.name}"')),
@@ -479,7 +499,7 @@ class _CustomerFormDialogState extends State<_CustomerFormDialog> {
   void initState() {
     super.initState();
     final c = widget.customer;
-    _codeController = TextEditingController(text: c?.code ?? _generateCode());
+    _codeController = TextEditingController(text: c?.code ?? '');
     _nameController = TextEditingController(text: c?.name ?? '');
     _contactController = TextEditingController(text: c?.contactPerson ?? '');
     _phoneController = TextEditingController(text: c?.phone ?? '');
@@ -490,11 +510,18 @@ class _CustomerFormDialogState extends State<_CustomerFormDialog> {
     _bankNameController = TextEditingController(text: c?.bankName ?? '');
     _noteController = TextEditingController(text: c?.note ?? '');
     _isActive = c?.isActive ?? true;
+    _initCode();
   }
 
-  String _generateCode() {
-    final count = CustomerRepositoryImpl.instance.count + 1;
-    return 'KH${count.toString().padLeft(3, '0')}';
+  void _initCode() async {
+    if (!isEditing) {
+      final count = await CustomerSqliteRepository.instance.count();
+      if (mounted) {
+        setState(() {
+          _codeController.text = 'KH${(count + 1).toString().padLeft(3, '0')}';
+        });
+      }
+    }
   }
 
   @override

@@ -32,6 +32,16 @@ class SettingsProvider extends ChangeNotifier {
   static const String _keySignalREnabled = 'signalr_enabled';
   static const String _keyNotificationsEnabled = 'notifications_enabled';
   static const String _keySoundEnabled = 'sound_enabled';
+  static const String _keyVoiceEnabled = 'voice_enabled';
+  static const String _keyVoiceVolume = 'voice_volume';
+  static const String _keyVoiceSpeechRate = 'voice_speech_rate';
+  static const String _keyVoicePitch = 'voice_pitch';
+  static const String _keyNotifyWeighing = 'notify_weighing';
+  static const String _keyNotifySync = 'notify_sync';
+  static const String _keyNotifyError = 'notify_error';
+  static const String _keyNotifyMaintenance = 'notify_maintenance';
+  static const String _keyAnnounceWeight = 'announce_weight';
+  static const String _keyAnnounceVehicle = 'announce_vehicle';
   static const String _keyLanguage = 'language';
   static const String _keyCompanyName = 'company_name';
   static const String _keyCompanyAddress = 'company_address';
@@ -63,6 +73,16 @@ class SettingsProvider extends ChangeNotifier {
   bool _signalREnabled = true;
   bool _notificationsEnabled = true;
   bool _soundEnabled = true;
+  bool _voiceEnabled = true;
+  double _voiceVolume = 1.0;
+  double _voiceSpeechRate = 0.5;
+  double _voicePitch = 1.0;
+  bool _notifyWeighing = true;
+  bool _notifySync = true;
+  bool _notifyError = true;
+  bool _notifyMaintenance = false;
+  bool _announceWeight = true;
+  bool _announceVehicle = true;
   String _language = 'vi';
   String _companyName = 'Công ty TNHH Nuôi trồng Thủy sản';
   String _companyAddress = '';
@@ -95,6 +115,16 @@ class SettingsProvider extends ChangeNotifier {
   bool get signalREnabled => _signalREnabled;
   bool get notificationsEnabled => _notificationsEnabled;
   bool get soundEnabled => _soundEnabled;
+  bool get voiceEnabled => _voiceEnabled;
+  double get voiceVolume => _voiceVolume;
+  double get voiceSpeechRate => _voiceSpeechRate;
+  double get voicePitch => _voicePitch;
+  bool get notifyWeighing => _notifyWeighing;
+  bool get notifySync => _notifySync;
+  bool get notifyError => _notifyError;
+  bool get notifyMaintenance => _notifyMaintenance;
+  bool get announceWeight => _announceWeight;
+  bool get announceVehicle => _announceVehicle;
   String get language => _language;
   String get companyName => _companyName;
   String get companyAddress => _companyAddress;
@@ -146,13 +176,29 @@ class SettingsProvider extends ChangeNotifier {
 
     // Azure
     _azureApiUrl = _prefs.getString(_keyAzureApiUrl) ?? _azureApiUrl;
+    // Migration: Fix old incorrect URL
+    if (_azureApiUrl.contains('canoto-api.azurewebsites.net')) {
+      _azureApiUrl = AzureConfig.apiBaseUrl; // Use correct URL from config
+      await _prefs.setString(_keyAzureApiUrl, _azureApiUrl);
+    }
     _azureFunctionKey = _prefs.getString(_keyAzureFunctionKey) ?? '';
+    // Note: Function key should be configured in Settings, not hardcoded
     _iotHubEnabled = _prefs.getBool(_keyIotHubEnabled) ?? false;
     _signalREnabled = _prefs.getBool(_keySignalREnabled) ?? true;
 
     // Notifications
     _notificationsEnabled = _prefs.getBool(_keyNotificationsEnabled) ?? true;
     _soundEnabled = _prefs.getBool(_keySoundEnabled) ?? true;
+    _voiceEnabled = _prefs.getBool(_keyVoiceEnabled) ?? true;
+    _voiceVolume = _prefs.getDouble(_keyVoiceVolume) ?? 1.0;
+    _voiceSpeechRate = _prefs.getDouble(_keyVoiceSpeechRate) ?? 0.5;
+    _voicePitch = _prefs.getDouble(_keyVoicePitch) ?? 1.0;
+    _notifyWeighing = _prefs.getBool(_keyNotifyWeighing) ?? true;
+    _notifySync = _prefs.getBool(_keyNotifySync) ?? true;
+    _notifyError = _prefs.getBool(_keyNotifyError) ?? true;
+    _notifyMaintenance = _prefs.getBool(_keyNotifyMaintenance) ?? false;
+    _announceWeight = _prefs.getBool(_keyAnnounceWeight) ?? true;
+    _announceVehicle = _prefs.getBool(_keyAnnounceVehicle) ?? true;
 
     // Localization
     _language = _prefs.getString(_keyLanguage) ?? 'vi';
@@ -306,6 +352,66 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setSoundEnabled(bool value) async {
     _soundEnabled = value;
     await _prefs.setBool(_keySoundEnabled, value);
+    notifyListeners();
+  }
+
+  Future<void> setVoiceEnabled(bool value) async {
+    _voiceEnabled = value;
+    await _prefs.setBool(_keyVoiceEnabled, value);
+    notifyListeners();
+  }
+
+  Future<void> setVoiceVolume(double value) async {
+    _voiceVolume = value.clamp(0.0, 1.0);
+    await _prefs.setDouble(_keyVoiceVolume, _voiceVolume);
+    notifyListeners();
+  }
+
+  Future<void> setVoiceSpeechRate(double value) async {
+    _voiceSpeechRate = value.clamp(0.0, 1.0);
+    await _prefs.setDouble(_keyVoiceSpeechRate, _voiceSpeechRate);
+    notifyListeners();
+  }
+
+  Future<void> setVoicePitch(double value) async {
+    _voicePitch = value.clamp(0.5, 2.0);
+    await _prefs.setDouble(_keyVoicePitch, _voicePitch);
+    notifyListeners();
+  }
+
+  Future<void> setNotifyWeighing(bool value) async {
+    _notifyWeighing = value;
+    await _prefs.setBool(_keyNotifyWeighing, value);
+    notifyListeners();
+  }
+
+  Future<void> setNotifySync(bool value) async {
+    _notifySync = value;
+    await _prefs.setBool(_keyNotifySync, value);
+    notifyListeners();
+  }
+
+  Future<void> setNotifyError(bool value) async {
+    _notifyError = value;
+    await _prefs.setBool(_keyNotifyError, value);
+    notifyListeners();
+  }
+
+  Future<void> setNotifyMaintenance(bool value) async {
+    _notifyMaintenance = value;
+    await _prefs.setBool(_keyNotifyMaintenance, value);
+    notifyListeners();
+  }
+
+  Future<void> setAnnounceWeight(bool value) async {
+    _announceWeight = value;
+    await _prefs.setBool(_keyAnnounceWeight, value);
+    notifyListeners();
+  }
+
+  Future<void> setAnnounceVehicle(bool value) async {
+    _announceVehicle = value;
+    await _prefs.setBool(_keyAnnounceVehicle, value);
     notifyListeners();
   }
 

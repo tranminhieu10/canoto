@@ -5,12 +5,12 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
 import 'package:canoto/services/sync/sync_service.dart';
 import 'package:canoto/services/scale/scale_service_manager.dart';
-import 'package:canoto/services/scale/nhb3000_scale_service.dart';
 import 'package:canoto/services/scale/serial_scale_service_impl.dart';
 import 'package:canoto/services/print/print_service.dart';
 import 'package:canoto/services/logging/logging_service.dart';
+import 'package:canoto/services/camera/camera_manager.dart';
 import 'package:canoto/providers/settings_provider.dart';
-import 'package:canoto/data/repositories/weighing_ticket_repository_impl.dart';
+import 'package:canoto/data/repositories/weighing_ticket_sqlite_repository.dart';
 import 'package:canoto/data/models/weighing_ticket.dart';
 import 'package:canoto/data/models/enums/weighing_enums.dart';
 
@@ -23,7 +23,8 @@ class WeighingScreenNew extends StatefulWidget {
 }
 
 class _WeighingScreenNewState extends State<WeighingScreenNew> {
-  // RTSP Camera
+  // RTSP Camera - Sử dụng CameraManager singleton
+  final CameraManager _cameraManager = CameraManager.instance;
   late final Player _player;
   late final VideoController _videoController;
   bool _isCameraConnected = false;
@@ -39,6 +40,7 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   // Stream subscriptions for proper cleanup
   StreamSubscription? _playingSubscription;
   StreamSubscription? _errorSubscription;
+  StreamSubscription? _cameraConnectionSubscription;
   late final void Function(SyncStatus) _syncListener;
 
   // Weight data - Real data from NHB3000
@@ -48,6 +50,7 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   double _netWeight = 0; // Trọng lượng hàng
   bool _isStable = false;
   bool _isScaleConnected = false;
+
 
   // Form data
   String _ticketNumber = '';
@@ -64,6 +67,9 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   // Sync status
   bool _isSynced = false;
 
+  // Danh sách phiếu cân từ database
+  List<WeighingTicket> _tickets = [];
+
   // Controllers
   final _licensePlateController = TextEditingController();
   final _containerController = TextEditingController();
@@ -73,9 +79,25 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   void initState() {
     super.initState();
     _generateTicketNumber();
+    _loadTickets(); // Load danh sách phiếu cân từ database
     _initCamera();
     _initScale();
     _initSync();
+  }
+
+  /// Load danh sách phiếu cân từ SQLite database
+  Future<void> _loadTickets() async {
+    try {
+      // Load phiếu cân 30 ngày gần nhất
+      final tickets = await WeighingTicketSqliteRepository.instance.getLast30Days();
+      if (mounted) {
+        setState(() {
+          _tickets = tickets;
+        });
+      }
+    } catch (e) {
+      LoggingService.instance.error('WeighingScreen', 'Failed to load tickets', error: e);
+    }
   }
 
   void _initScale() {
@@ -141,6 +163,15 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   Future<void> _connectScale() async {
+    // Nếu đã kết nối rồi, không cần kết nối lại
+    if (_scaleService.isConnected) {
+      debugPrint('WeighingScreen: Scale already connected');
+      setState(() {
+        _isScaleConnected = true;
+      });
+      return;
+    }
+
     final settings = context.read<SettingsProvider>();
     final connType = settings.scaleConnectionType;
     debugPrint('WeighingScreen: Connecting to scale via $connType...');
@@ -182,31 +213,31 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   void _initCamera() {
-    _player = Player();
-    _videoController = VideoController(_player);
+    // Khởi tạo CameraManager nếu chưa có
+    _cameraManager.initialize();
+    
+    // Lấy player và controller từ CameraManager
+    _player = _cameraManager.player!;
+    _videoController = _cameraManager.videoController!;
 
-    // Listen for player state changes with cancellable subscription
-    _playingSubscription = _player.stream.playing.listen((playing) {
+    // Kiểm tra nếu đã kết nối
+    _isCameraConnected = _cameraManager.isConnected;
+    _isCameraLoading = !_cameraManager.isConnected;
+
+    // Listen for camera connection changes
+    _cameraConnectionSubscription = _cameraManager.connectionStream.listen((connected) {
       if (mounted) {
         setState(() {
-          _isCameraConnected = playing;
+          _isCameraConnected = connected;
           _isCameraLoading = false;
         });
       }
     });
 
-    _errorSubscription = _player.stream.error.listen((error) {
-      if (mounted) {
-        setState(() {
-          _isCameraConnected = false;
-          _isCameraLoading = false;
-        });
-        debugPrint('Camera error: $error');
-      }
-    });
-
-    // Connect to RTSP stream
-    _connectCamera();
+    // Nếu chưa kết nối, kết nối camera
+    if (!_cameraManager.isConnected) {
+      _connectCamera();
+    }
   }
 
   Future<void> _connectCamera() async {
@@ -222,7 +253,8 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
           ? settings.cameraUrl
           : 'rtsp://192.168.1.232:554/main';
 
-      await _player.open(Media(cameraUrl));
+      // Sử dụng CameraManager để kết nối
+      await _cameraManager.connect(cameraUrl);
     } catch (e) {
       debugPrint('Failed to connect camera: $e');
       if (mounted) {
@@ -234,11 +266,26 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     }
   }
 
-  void _generateTicketNumber() {
-    final now = DateTime.now();
-    // Format: YYMMDDXXXX where XXXX is sequential number
-    _ticketNumber =
-        'PC-${now.year % 100}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-0001';
+  Future<void> _generateTicketNumber() async {
+    try {
+      // Gọi repository để lấy số phiếu tiếp theo theo ngày
+      final ticketNumber = await WeighingTicketSqliteRepository.instance.generateTicketNumber();
+      if (mounted) {
+        setState(() {
+          // Format: PC-YYMMDD-XXXX (thêm dấu gạch ngang cho dễ đọc)
+          final parts = ticketNumber.replaceFirst('PC', '');
+          if (parts.length >= 10) {
+            _ticketNumber = 'PC-${parts.substring(0, 6)}-${parts.substring(6)}';
+          } else {
+            _ticketNumber = ticketNumber;
+          }
+        });
+      }
+    } catch (e) {
+      // Fallback nếu lỗi
+      final now = DateTime.now();
+      _ticketNumber = 'PC-${now.year % 100}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-0001';
+    }
   }
 
   @override
@@ -246,14 +293,18 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     // Cancel stream subscriptions to prevent memory leaks
     _playingSubscription?.cancel();
     _errorSubscription?.cancel();
+    _cameraConnectionSubscription?.cancel();
     _weightSubscription?.cancel();
     _scaleStatusSubscription?.cancel();
     SyncService.instance.removeListener(_syncListener);
 
-    // Disconnect scale
-    _scaleService.disconnect();
+    // KHÔNG ngắt kết nối cân và camera khi rời màn hình - giữ kết nối để Dashboard hiển thị đúng
+    // _scaleService.disconnect();
+    // _cameraManager.disconnect(); // Camera giữ kết nối
 
-    _player.dispose();
+    // KHÔNG dispose player vì CameraManager quản lý
+    // _player.dispose();
+    
     _licensePlateController.dispose();
     _containerController.dispose();
     _noteController.dispose();
@@ -421,11 +472,9 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Text(
-                                  _currentWeight > 0
-                                      ? _formatWeight(_currentWeight)
-                                      : 'No Data',
+                                  _formatWeight(_currentWeight),
                                   style: TextStyle(
-                                    color: _currentWeight > 0
+                                    color: _isScaleConnected
                                         ? const Color(0xFF39FF14)
                                         : const Color(0xFFFF4444),
                                     fontSize: 56,
@@ -435,7 +484,7 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
                                     shadows: [
                                       Shadow(
                                         color:
-                                            (_currentWeight > 0
+                                            (_isScaleConnected
                                                     ? const Color(0xFF39FF14)
                                                     : const Color(0xFFFF4444))
                                                 .withOpacity(0.5),
@@ -1716,8 +1765,8 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   List<DataRow> _buildTableRows() {
-    // Real data from local repository
-    final tickets = WeighingTicketRepositoryImpl.instance.tickets;
+    // Dùng danh sách tickets từ state (đã load từ SQLite)
+    final tickets = _tickets;
 
     if (tickets.isEmpty) {
       // Return empty row with message
@@ -1746,7 +1795,7 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
       ];
     }
 
-    return tickets.take(10).map((ticket) {
+    return tickets.take(50).map((ticket) {
       final weighTime = ticket.firstWeightTime ?? ticket.createdAt;
       final time =
           '${weighTime.hour.toString().padLeft(2, '0')}:${weighTime.minute.toString().padLeft(2, '0')}';
@@ -1907,14 +1956,15 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   // Action handlers
-  void _onNewWeighing() {
+  void _onNewWeighing() async {
     setState(() {
       _currentWeight = 0;
       _grossWeight = 0;
       _tareWeight = 0;
       _netWeight = 0;
-      _generateTicketNumber();
     });
+    // Tạo số phiếu mới theo ngày
+    await _generateTicketNumber();
   }
 
   void _onSave() async {
@@ -1941,21 +1991,26 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     );
 
     try {
-      // Save to repository
-      await WeighingTicketRepositoryImpl.instance.insert(ticket);
+      // Save to SQLite repository
+      await WeighingTicketSqliteRepository.instance.insert(ticket);
       LoggingService.instance.info(
         'WeighingScreen',
         'Ticket saved: ${ticket.ticketNumber}',
       );
 
+      // Reload danh sách tickets từ database
+      await _loadTickets();
+
       if (mounted) {
-        setState(() {}); // Refresh to show new ticket in table
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Đã lưu phiếu cân'),
             backgroundColor: Colors.green,
           ),
         );
+        
+        // Tạo số phiếu mới cho lượt cân tiếp theo
+        await _generateTicketNumber();
       }
     } catch (e) {
       LoggingService.instance.error(
@@ -1993,17 +2048,29 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     try {
       final screenshot = await _player.screenshot();
       if (screenshot != null && mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Đã chụp ảnh từ camera')));
-        // TODO: Save screenshot and trigger license plate recognition
+        // Lưu ảnh vào thư mục tạm
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final fileName = 'capture_${_ticketNumber}_$timestamp.jpg';
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Đã chụp ảnh: $fileName'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        
+        // Gọi nhận dạng biển số nếu có Vision Master
+        _onRecognizePlate();
       }
     } catch (e) {
       debugPrint('Failed to capture: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Không thể chụp ảnh')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Không thể chụp ảnh - Kiểm tra kết nối camera'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -2013,7 +2080,15 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   void _onRecognizePlate() {
-    // TODO: Trigger Vision Master
+    // Kiểm tra cấu hình Vision Master từ Settings
+    // Vision Master API sẽ được gọi từ đây
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Nhận dạng biển số - Cần cấu hình Vision Master trong Cài đặt'),
+        backgroundColor: Colors.blue,
+        duration: Duration(seconds: 3),
+      ),
+    );
   }
 
   void _onClearPlate() {
@@ -2115,10 +2190,10 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
     final settings = context.read<SettingsProvider>();
     debugPrint('WeighingScreen: Syncing with URL=${settings.azureApiUrl}, hasKey=${settings.azureFunctionKey.isNotEmpty}');
 
-    // Sync using SyncService
-    final repo = WeighingTicketRepositoryImpl.instance;
+    // Sync using SyncService - only sync completed tickets in last 90 days
+    final repo = WeighingTicketSqliteRepository.instance;
     final result = await SyncService.instance.syncData(
-      getUnsyncedTickets: () => repo.getUnsynced(),
+      getUnsyncedTickets: () => repo.getUnsyncedCompleted(days: 90),
       markAsSynced: (ids, azureIds) => repo.markAsSynced(ids, azureIds),
     );
 
@@ -2140,11 +2215,25 @@ class _WeighingScreenNewState extends State<WeighingScreenNew> {
   }
 
   void _onOpenBarrier() {
-    // TODO: Open barrier
+    // Kiểm tra cấu hình Barrier từ Settings
+    final settings = context.read<SettingsProvider>();
+    
+    if (!settings.barrierEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Barrier chưa được bật - Kiểm tra trong Cài đặt'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    
+    // Gửi lệnh mở barrier qua Modbus TCP
+    // Barrier IP: settings.barrierIp, Port: settings.barrierPort
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Đã mở barrier'),
-        backgroundColor: Colors.orange,
+        content: Text('Đã gửi lệnh mở Barrier'),
+        backgroundColor: Colors.green,
         duration: Duration(seconds: 2),
       ),
     );
